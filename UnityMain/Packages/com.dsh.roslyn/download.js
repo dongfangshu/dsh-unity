@@ -1,5 +1,8 @@
-// Download Roslyn 3.8.0 + runtime deps from nuget.org (flat container) via Node fetch.
+// Download Roslyn 3.8.0 + EXACT runtime deps from nuget.org (flat container) via Node fetch.
 // schannel (pwsh/curl) cannot establish TLS on this machine; Node's OpenSSL works.
+// Assembly versions must match what Microsoft.CodeAnalysis 3.8.0 references:
+// Immutable 5.0.0.0, Ref.Metadata 5.0.0.0, Memory 4.0.1.1, Tasks.Extensions
+// 4.2.0.1, Unsafe 4.0.6.0, CodePages 4.1.1.0, Buffers 4.0.3.0, Numerics.Vectors 4.1.4.0.
 const fs = require('fs')
 const path = require('path')
 
@@ -8,9 +11,15 @@ const pkgs = [
   { id: 'microsoft.codeanalysis.csharp.scripting', ver: '3.8.0' },
   { id: 'microsoft.codeanalysis.csharp', ver: '3.8.0' },
   { id: 'microsoft.codeanalysis.common', ver: '3.8.0' },
+  { id: 'microsoft.codeanalysis.scripting.common', ver: '3.8.0' },
   { id: 'system.text.encoding.codepages', ver: '4.5.1' },
-  { id: 'system.collections.immutable', ver: '1.5.0' },
-  { id: 'system.reflection.metadata', ver: '1.6.0' },
+  { id: 'system.collections.immutable', ver: '5.0.0' },
+  { id: 'system.reflection.metadata', ver: '5.0.0' },
+  { id: 'system.memory', ver: '4.5.4' },
+  { id: 'system.buffers', ver: '4.5.1' },
+  { id: 'system.numerics.vectors', ver: '4.5.0' },
+  { id: 'system.runtime.compilerservices.unsafe', ver: '4.7.1' },
+  { id: 'system.threading.tasks.extensions', ver: '4.5.4' },
 ]
 
 fs.mkdirSync(DL, { recursive: true })

@@ -50,7 +50,8 @@ Errors: `"ok": false, "error": "..."`.
 | `pause` / `resume` / `step` | — | play-mode stepping |
 | `menu` | `item` | `EditorApplication.ExecuteMenuItem` (exact path) |
 | `eval` | `type`, `method`, `argsJson?` | invoke any static method; `argsJson` is a JSON array of scalars |
-| `cs` | `code`, `imports?`, `data?` | compile + run agent-written C# with Roslyn (in memory, no domain reload); `data` JSON becomes the script global `Args` |
+| `cs` | `code`, `imports?`, `data?` | compile + run agent-written C# with Roslyn (in memory, no domain reload); code must define `Entry.Main(object args)`; `data` JSON → `args` |
+| `reload` | — | recompile all scripts + domain reload **in place** (no editor restart); heartbeat pauses then resumes |
 | `hierarchy` | `recursive?` | list scene root objects (`name`, `path`, `active`, `children`) |
 | `log` | `lines?` | tail of captured console log |
 
@@ -63,22 +64,31 @@ the local filesystem; keep `in/` trusted.
 ## Roslyn C# scripting (`cs` op / `unity_cs` tool)
 
 The embedded UPM package `UnityMain/Packages/com.dsh.roslyn` bundles
-Microsoft.CodeAnalysis 3.8.0 (editor-only, `Editor/` folder) plus its runtime
-deps (`System.Collections.Immutable` 1.5.0, `System.Reflection.Metadata` 1.6.0,
-`System.Text.Encoding.CodePages` 4.5.1 — versions matching Unity's own
-netstandard 2.1 BCL to avoid conflicts). No domain reload: scripts compile to
-memory and run on the editor main thread.
+Microsoft.CodeAnalysis 3.8.0 (editor-only, `Editor/` folder) plus its exact
+runtime deps at the assembly versions Roslyn references (`System.Collections.
+Immutable` 5.0.0, `System.Reflection.Metadata` 5.0.0, `System.Memory` 4.0.1.1,
+`System.Threading.Tasks.Extensions` 4.2.0.1, `System.Runtime.CompilerServices.
+Unsafe` 4.0.6.0, `System.Text.Encoding.CodePages` 4.1.1.0, `System.Buffers`
+4.0.3.0, `System.Numerics.Vectors` 4.1.4.0). No domain reload: scripts compile
+to memory and run on the editor main thread.
 
+- **Contract**: the code must define a static class named `Entry` with a
+  `public static object Main(object args)` method. `args` is the parsed
+  `data` JSON (cast to `Dictionary<string,object>` to read keys); the return
+  value becomes `result.value` (scalars pass through, other objects become
+  their `ToString()`).
+- **Implementation note**: uses `CSharpCompilation` → emit to memory →
+  `Assembly.Load(byte[])` → reflection. NOT the Roslyn Scripting API — its
+  assembly loader goes through `AssemblyLoadContext`, which Unity's Mono
+  stubs out with `NotImplementedException`.
 - Language version: C# 9 (Roslyn 3.8). `download.js` in the package folder
   re-fetches the packages from nuget.org — bump the versions there to upgrade.
 - References: every assembly currently loaded in the editor (UnityEngine,
   UnityEditor, your own scripts, ...).
-- Default imports: `System`, `System.Collections.Generic`, `System.Linq`,
-  `System.Text`, `System.IO`, `System.Threading`,
-  `System.Text.RegularExpressions`, `UnityEngine`, `UnityEditor`.
-- The script sees one global: `Args` (the JSON object passed as `data`).
-- The last expression's value is returned as `result.value` (scalars pass
-  through; other objects become their `ToString()`).
+- Auto-prepended `using` directives: `System`, `System.Collections.Generic`,
+  `System.Linq`, `System.Text`, `System.IO`, `System.Threading`,
+  `System.Text.RegularExpressions`, `UnityEngine`, `UnityEditor`; pass extra
+  namespaces via `imports` (comma-separated).
 - Compile errors and runtime exceptions come back as `"ok": false` with
   diagnostics in `error`.
 
