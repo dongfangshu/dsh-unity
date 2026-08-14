@@ -1,0 +1,44 @@
+# ===== Unity generated =====
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+MemoryCaptures/
+SysInfoAssist/
+
+# ===== Unity generated project files =====
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.opendb
+*.VC.db
+
+# ===== IDE =====
+.vs/
+.idea/
+.vscode/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Build artifacts =====
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# ===== DSH Unity bridge: transient queue state (recreated on editor start) =====
+UnityMain/UnityBridge/
+
+# ===== Roslyn re-download temp (if any) =====
+.roslyn-download/
