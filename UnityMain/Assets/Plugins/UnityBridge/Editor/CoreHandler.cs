@@ -1,7 +1,7 @@
 // ============================================================================
 //  CoreHandler.cs — `core` domain: bridge self-inspection + lifecycle.
 //
-//  Ops: ping | status | log | reload | menu
+//  Ops: ping | status | reload | menu
 //  (routed here by UnityBridge.Execute on the command's `domain` field)
 // ============================================================================
 #if UNITY_EDITOR
@@ -25,8 +25,6 @@ namespace DSH.UnityBridge
                     return new Dictionary<string, object> { ["pong"] = true, ["bridge"] = UnityBridge.Version };
                 case "status":
                     return Status();
-                case "log":
-                    return UnityBridge.LogSnapshot(UnityBridge.GetInt(args, "lines", 50));
                 case "reload":
                     // Recompile all scripts + domain reload (no editor restart).
                     CompilationPipeline.RequestScriptCompilation();
