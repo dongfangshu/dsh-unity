@@ -47,6 +47,7 @@ _Avoid_: 特权写 op、script.cs / script.eval（旧名）
 
 **core**:
 编辑器会话操作的命名空间，封闭集合：`ping / reload / status / menuitem / openscene / removescene / save / play / stop / pause / resume / step`。会话操作指编辑器菜单/工具栏级的能力，与对象类型无关。
+`reload` 是其中语义特殊的一条：先写出响应，再请求编译（随后 domain reload）。execute 路径上若触发 reload，正在跑的程序集会被杀掉、来不及自己写响应——靠认领与打断诊断收场，而不是在脚本里调用 reload。
 _Avoid_: 按 Unity 类型扩展 core、场景域/资产域 op（旧名）
 
 **log**:
@@ -56,4 +57,10 @@ _Avoid_: 日志文件读取（Editor.log 是未来扩展）
 ## 协议
 
 **文件队列协议**:
-主机（agent）与编辑器之间唯一的通信方式：JSON 文件经 `Library/UnityBridge/` 的 in/out/done/status 目录单向流动，无网络端口。
+主机（agent）与编辑器之间唯一的通信方式：JSON 文件经 `Library/UnityBridge/` 的 in/running/out/done/status 目录单向流动，无网络端口。
+
+**认领**:
+一条命令必须先从 in/ 移入 running/ 才执行；running/ 里至多一条。认领先于执行，所以同一条命令不会因 domain reload 再跑一遍（至多一次）。
+
+**打断**:
+新 domain 起来时，running/ 里残留的文件是上一次执行被 reload 中途杀掉的命令：写出 `ok: false, error: "interrupted by domain reload"`，不再重跑。

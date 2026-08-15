@@ -4,10 +4,11 @@
 //  Protocol v2 (see README at the project root for the full doc):
 //
 //    <project>/Library/UnityBridge/
-//      in/     command files  <id>.json   (written by the agent side)
-//      out/    response files <id>.json   (written here, pruned after 120s)
-//      done/   processed command files    (pruned after 600s)
-//      status/ heartbeat.json (every 1s) + log.json (captured console log)
+//      in/      command files  <id>.json   (written by the agent side)
+//      running/ at most one claimed command (claimed before execute)
+//      out/     response files <id>.json   (written here, pruned after 120s)
+//      done/    processed command files    (pruned after 600s)
+//      status/  heartbeat.json (every 1s) + log.json (captured console log)
 //
 //  The runtime queue lives under Library/ — machine-local, never version
 //  controlled, auto-recreated on init, safe to wipe together with Unity's
@@ -28,6 +29,11 @@
 //  Response:  { "id": "...", "domain": "scene", "op": "play", "ok": true,
 //               "ts": ..., "result": { ... } }
 //
+//  Claim-then-execute: in/ → running/ (at most one) before Execute, then
+//  out/ + done/. Leftovers in running/ after a domain reload are reaped as
+//  "interrupted by domain reload" and never retried. core.reload writes its
+//  response before requesting compilation so the reload cannot swallow it.
+//
 //  This file is the CORE ONLY: the poll loop, domain routing, heartbeat, log
 //  ring and file utilities. All domain logic lives in the *Handler.cs files.
 //
@@ -41,7 +47,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using SimpleJSON;
 using UnityEditor;
 using UnityEngine;
@@ -60,6 +65,7 @@ namespace DSH.UnityBridge
         static bool _enabled = true;
         static string _root;
         static string _inDir;
+        static string _runningDir;
         static string _outDir;
         static string _doneDir;
         static string _statusDir;
@@ -73,13 +79,17 @@ namespace DSH.UnityBridge
         {
             _root = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "Library", "UnityBridge"));
             _inDir = Path.Combine(_root, "in");
+            _runningDir = Path.Combine(_root, "running");
             _outDir = Path.Combine(_root, "out");
             _doneDir = Path.Combine(_root, "done");
             _statusDir = Path.Combine(_root, "status");
             Directory.CreateDirectory(_inDir);
+            Directory.CreateDirectory(_runningDir);
             Directory.CreateDirectory(_outDir);
             Directory.CreateDirectory(_doneDir);
             Directory.CreateDirectory(_statusDir);
+
+            ReapInterrupted();
 
             Application.logMessageReceived += OnLog;
             EditorApplication.update += Update;
@@ -100,7 +110,9 @@ namespace DSH.UnityBridge
         // ------------------------------------------------------------------
         static void Update()
         {
-            float now = Time.realtimeSinceStartup;
+            // Editor clock — Time.realtimeSinceStartup resets on OpenScene /
+            // play-mode, which would freeze poll + heartbeat for hours.
+            float now = (float)EditorApplication.timeSinceStartup;
             if (_enabled && now - _lastPoll >= PollInterval)
             {
                 _lastPoll = now;
@@ -127,37 +139,99 @@ namespace DSH.UnityBridge
         // ------------------------------------------------------------------
         static void ProcessCommands()
         {
+            // At most one in-flight command. Leftovers here mean the previous
+            // Execute never returned (typically a domain reload).
+            if (Directory.GetFiles(_runningDir, "*.json").Length > 0) return;
+
             string[] files = Directory.GetFiles(_inDir, "*.json");
             if (files.Length == 0) return;
 
-            foreach (string file in files.OrderBy(File.GetLastWriteTime))
-            {
-                string text = null;
-                try { text = File.ReadAllText(file); }
-                catch { continue; } // locked or vanished; try next tick
+            // One command per tick so the heartbeat can run between them.
+            string file = files.OrderBy(File.GetLastWriteTime).First();
+            string name = Path.GetFileName(file);
+            string runningPath = Path.Combine(_runningDir, name);
 
-                string id = null;
-                string domain = null;
-                string op = null;
+            try { File.Move(file, runningPath); }
+            catch { return; } // locked, vanished, or dest exists; try next tick
+
+            string id = Path.GetFileNameWithoutExtension(name);
+            string domain = null;
+            string op = null;
+            string text = null;
+            try
+            {
+                text = File.ReadAllText(runningPath);
+                var cmd = BridgeCommand.Parse(text);
+                if (!string.IsNullOrEmpty(cmd.id)) id = cmd.id;
+                domain = cmd.domain;
+                op = cmd.op;
+                // core.reload: write the response and leave running/ before
+                // requesting compilation, so a domain reload cannot swallow it.
+                if (domain == "core" && op == "reload")
+                {
+                    WriteResponse(id, domain, op, true,
+                        new Dictionary<string, object> { ["reloading"] = true }, null);
+                    FinishRunning(runningPath, name);
+                    Execute(cmd.domain, cmd.op, cmd.args);
+                    return;
+                }
+                object result = Execute(cmd.domain, cmd.op, cmd.args);
+                WriteResponse(id, domain, op, true, result, null);
+            }
+            catch (Exception ex)
+            {
+                WriteResponse(id, domain ?? GetDomainHint(text), op ?? GetOpHint(text), false, null, ex.Message);
+            }
+            finally
+            {
+                FinishRunning(runningPath, name);
+            }
+        }
+
+        /// <summary>
+        /// After a domain reload, anything left in running/ was claimed but
+        /// never finished. Write a diagnostic unless out/ already has a
+        /// response (Execute returned, then reload hit before we moved to done/).
+        /// </summary>
+        static void ReapInterrupted()
+        {
+            string[] leftovers;
+            try { leftovers = Directory.GetFiles(_runningDir, "*.json"); }
+            catch { return; }
+
+            foreach (string file in leftovers)
+            {
+                string name = Path.GetFileName(file);
+                string id = Path.GetFileNameWithoutExtension(name);
+                string domain = "?";
+                string op = "?";
                 try
                 {
+                    string text = File.ReadAllText(file);
                     var cmd = BridgeCommand.Parse(text);
-                    id = string.IsNullOrEmpty(cmd.id) ? ExtractId(text) : cmd.id;
-                    domain = cmd.domain;
-                    op = cmd.op;
-                    object result = Execute(cmd.domain, cmd.op, cmd.args);
-                    WriteResponse(id, domain, op, true, result, null);
+                    if (!string.IsNullOrEmpty(cmd.id)) id = cmd.id;
+                    if (!string.IsNullOrEmpty(cmd.domain)) domain = cmd.domain;
+                    if (!string.IsNullOrEmpty(cmd.op)) op = cmd.op;
                 }
-                catch (Exception ex)
-                {
-                    WriteResponse(id ?? ExtractId(text), domain ?? GetDomainHint(text), op ?? GetOpHint(text), false, null, ex.Message);
-                }
-                finally
-                {
-                    try { File.Move(file, Path.Combine(_doneDir, Path.GetFileName(file))); }
-                    catch { try { File.Delete(file); } catch { } }
-                }
+                catch { }
+
+                string outPath = Path.Combine(_outDir, id + ".json");
+                if (!File.Exists(outPath))
+                    WriteResponse(id, domain, op, false, null, "interrupted by domain reload");
+
+                FinishRunning(file, name);
             }
+        }
+
+        static void FinishRunning(string runningPath, string name)
+        {
+            string dest = Path.Combine(_doneDir, name);
+            try
+            {
+                if (File.Exists(dest)) File.Delete(dest);
+                File.Move(runningPath, dest);
+            }
+            catch { try { File.Delete(runningPath); } catch { } }
         }
 
         static string GetOpHint(string text)
@@ -180,23 +254,6 @@ namespace DSH.UnityBridge
             }
             catch { }
             return "?";
-        }
-
-        static string ExtractId(string text)
-        {
-            if (text == null) return "unknown";
-            try
-            {
-                var node = JSON.Parse(text);
-                if (node != null && node.IsObject)
-                {
-                    string v = node["id"].Value;
-                    if (!string.IsNullOrEmpty(v)) return v;
-                }
-            }
-            catch { }
-            var m = Regex.Match(text, "\"id\"\\s*:\\s*\"([^\"]+)\"");
-            return m.Success ? m.Groups[1].Value : "unknown-" + Guid.NewGuid().ToString("N").Substring(0, 8);
         }
 
         static void WriteResponse(string id, string domain, string op, bool ok, object result, string error)
@@ -228,7 +285,7 @@ namespace DSH.UnityBridge
         {
             lock (LogRing)
             {
-                LogRing.Add(Time.realtimeSinceStartup.ToString("F2", CultureInfo.InvariantCulture) + " [" + type + "] " + condition);
+                LogRing.Add(((float)EditorApplication.timeSinceStartup).ToString("F2", CultureInfo.InvariantCulture) + " [" + type + "] " + condition);
                 if (LogRing.Count > LogRingSize) LogRing.RemoveRange(0, LogRing.Count - LogRingSize);
                 _logDirty = true;
             }

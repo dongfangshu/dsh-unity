@@ -26,11 +26,12 @@ the project itself.
 
 ```
 <project>/Library/UnityBridge/
-  in/     command files  <id>.json   (you write here)
-  out/    response files <id>.json   (bridge writes here; pruned after 120s)
-  done/   processed command files    (pruned after 600s)
-  status/heartbeat.json              (refreshed every 1s while editor is open)
-  status/log.json                    (last 300 captured console lines)
+  in/       command files  <id>.json   (you write here)
+  running/  at most one claimed command (bridge moves here before execute)
+  out/      response files <id>.json   (bridge writes here; pruned after 120s)
+  done/     processed command files    (pruned after 600s)
+  status/heartbeat.json                (refreshed every 1s while editor is open)
+  status/log.json                      (last 300 captured console lines)
 ```
 
 If `status/heartbeat.json` is missing or older than ~15 s, the bridge is
@@ -48,8 +49,9 @@ core`. Write a command file `in/<id>.json`:
 { "id": "my-1", "domain": "read", "op": "hierarchy", "args": { "path": "Assets/Scenes/SampleScene.unity/Player" } }
 ```
 
-The bridge picks it up within ~0.2 s, executes it on the editor main thread,
-moves it to `done/`, and writes `out/my-1.json`:
+The bridge picks it up within ~0.2 s, **claims** it (`in/` → `running/`; at
+most one in flight), executes it on the editor main thread, writes
+`out/my-1.json`, then moves it to `done/`:
 
 ```json
 { "id": "my-1", "domain": "read", "op": "hierarchy", "ok": true, "ts": 1786773207.1, "result": { "path": "...", "kind": "gameObject" } }
@@ -63,6 +65,7 @@ Rules:
 - `domain` is required: `read | execute | log | core`.
 - `args` is optional (`{}` when none).
 - Stale files in `in/` are pruned after 10 min; `out/` after 120 s.
+  `running/` is not pruned — leftovers are reaped on the next editor load.
 - Everything is plain UTF-8 JSON files — any language/runtime can drive it.
 
 Helper pattern (poll for the response):
@@ -145,7 +148,7 @@ Every create/update/delete is a C# script. The code must define
 | `core.ping` | — | round-trip check (`result.pong` = true) |
 | `core.reload` | — | import assets + recompile all scripts (domain reload). **Send this after editing any C# file**; wait for the heartbeat to resume (10–30 s) |
 | `core.status` | — | snapshot: `playing`, `paused`, `isCompiling`, `isUpdating`, `activeScene`, `openScenes[]`, `selection[]`, `projectPath`, `unityVersion`, `buildTarget` |
-| `core.menuitem` | `item` | execute a menu item by exact path, e.g. `"File/Save Project"` |
+| `core.menuitem` | `item` | execute a menu item by exact path, e.g. `"File/Save Project"`. Missing or disabled path → `"ok": false` (validated before execute) |
 | `core.openscene` | `path`, `mode?` (`single`/`additive`) | open a scene (`.unity` optional), e.g. `"Assets/Scenes/SampleScene.unity"` |
 | `core.removescene` | `path` \| `"all"` | close a scene (discards unsaved changes; refuses to close the last one) |
 | `core.save` | `path?` | save all open scenes, or one by path |
@@ -174,8 +177,11 @@ Every create/update/delete is a C# script. The code must define
 - **`"ok": false` / timeout** — bridge offline: editor closed, package not
   installed, or `Tools > Unity Bridge` disabled. **Ask the user to open the
   project** (this skill never launches Unity).
-- **No response after `core.reload`** — expected: the editor domain-reloads;
-  wait for the heartbeat file to refresh.
+- **No response after `core.reload`** — expected: the editor domain-reloads
+  after writing `{reloading: true}`; wait for the heartbeat file to refresh.
+- **`"interrupted by domain reload"`** — the command was claimed then killed
+  mid-execute (script triggered a compile, or reload landed while it ran).
+  It will **not** be retried; send it again if you still need the effect.
 - **Compile errors in `error`** — the C# failed to compile; fix per the
   diagnostics (positions are `(line, col)`).
 - **`read.hierarchy` says the scene is not open** — open it with

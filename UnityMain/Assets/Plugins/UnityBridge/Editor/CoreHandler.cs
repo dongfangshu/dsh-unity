@@ -9,12 +9,19 @@
 //  operations — menu/toolbar-level actions that are independent of object
 //  types. It is a closed set: new capabilities are expressed through
 //  execute.cs or new read schemes, not new core ops.
+//
+//  `reload` is the one op that is allowed to kill the running domain: the
+//  queue claims the command, this handler returns `{reloading:true}`, the
+//  response is written, then compilation proceeds. An execute.cs that
+//  triggers a reload itself never gets to write its own response — leftovers
+//  in running/ are reaped as "interrupted by domain reload".
 // ============================================================================
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using SimpleJSON;
 using UnityEditor;
 using UnityEditor.Compilation;
@@ -33,17 +40,15 @@ namespace DSH.UnityBridge
                 case "ping":
                     return new Dictionary<string, object> { ["pong"] = true, ["bridge"] = UnityBridge.Version };
                 case "reload":
-                    // Import assets + recompile all scripts (domain reload).
+                    // Respond first; compilation/domain-reload happens after
+                    // this returns (the queue has already claimed the command).
                     AssetDatabase.Refresh();
                     CompilationPipeline.RequestScriptCompilation();
                     return new Dictionary<string, object> { ["reloading"] = true };
                 case "status":
                     return Status();
                 case "menuitem":
-                    return new Dictionary<string, object>
-                    {
-                        ["executed"] = EditorApplication.ExecuteMenuItem(UnityBridge.GetString(args, "item") ?? "")
-                    };
+                    return MenuItem(UnityBridge.GetString(args, "item"));
                 case "openscene":
                     return OpenScene(UnityBridge.GetString(args, "path"), UnityBridge.GetString(args, "mode"));
                 case "removescene":
@@ -68,6 +73,27 @@ namespace DSH.UnityBridge
                 default:
                     throw new Exception("unknown op '" + op + "' in domain core");
             }
+        }
+
+        static Dictionary<string, object> MenuItem(string item)
+        {
+            if (string.IsNullOrEmpty(item))
+                throw new Exception("core.menuitem requires args.item (exact path, e.g. File/Save Project)");
+            if (!MenuExists(item))
+                throw new Exception("no menu named '" + item + "'");
+            if (!Menu.GetEnabled(item))
+                throw new Exception("menu is disabled: " + item);
+            if (!EditorApplication.ExecuteMenuItem(item))
+                throw new Exception("menu item did not execute: " + item);
+            return new Dictionary<string, object> { ["executed"] = true };
+        }
+
+        static bool MenuExists(string path)
+        {
+            var method = typeof(Menu).GetMethod("MenuItemExists", BindingFlags.NonPublic | BindingFlags.Static);
+            if (method != null)
+                return (bool)method.Invoke(null, new object[] { path });
+            return Menu.GetEnabled(path);
         }
 
         static Dictionary<string, object> Status()

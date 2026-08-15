@@ -38,6 +38,7 @@ place Unity keeps its own cache, so it is machine-local, never committed, and
 safe to wipe (the bridge recreates it on init):
 
 - `in/` — command files `<id>.json`, written by the agent
+- `running/` — at most one claimed command; moved here **before** execute (at-most-once). Leftovers after a domain reload are reaped as `"interrupted by domain reload"`
 - `out/` — response files `<id>.json`, written by Unity (pruned after 120s)
 - `done/` — processed commands moved here (pruned after 600s)
 - `status/heartbeat.json` — refreshed every 1s; agent uses it to detect "online"
@@ -128,9 +129,9 @@ becomes `{type, name, instance}`.
 | op | args | effect |
 |---|---|---|
 | `core.ping` | — | round-trip check (`result.pong` = true) |
-| `core.reload` | — | `AssetDatabase.Refresh()` (import) + `RequestScriptCompilation()` (recompile, domain reload) |
+| `core.reload` | — | write `{reloading: true}` first, then `AssetDatabase.Refresh()` + `RequestScriptCompilation()`. This is the op that may destroy the running domain; in-flight `execute.cs` that triggers a reload is reaped as `"interrupted by domain reload"` (never retried) |
 | `core.status` | — | snapshot: `playing`, `paused`, `isCompiling`, `isUpdating`, `activeScene`, `openScenes[]`, `selection[]`, `projectPath`, `unityVersion`, `buildTarget` |
-| `core.menuitem` | `item` | `EditorApplication.ExecuteMenuItem` (exact path, no whitelist) |
+| `core.menuitem` | `item` | check the menu exists (and is enabled), then `ExecuteMenuItem`. Missing or disabled → `"ok": false` |
 | `core.openscene` | `path`, `mode?` (`single`/`additive`) | open a scene; `.unity` suffix optional |
 | `core.removescene` | `path` \| `"all"` | close a scene (discarding unsaved changes); activation moves off the target first; refuses to close the last open scene |
 | `core.save` | `path?` | save all open scenes, or one scene by path |
