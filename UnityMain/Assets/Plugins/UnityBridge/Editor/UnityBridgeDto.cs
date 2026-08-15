@@ -7,15 +7,14 @@
 //
 //  Protocol v2 — ops are namespaced by domain:
 //
-//    Command:   { "id": "...", "domain": "scene", "op": "play", "args": { ... } }
-//    Response:  { "id": "...", "domain": "scene", "op": "play", "ok": true,
+//    Command:   { "domain": "core", "op": "play", "args": { ... } }
+//    Response:  { "id": "<filename>", "domain": "core", "op": "play", "ok": true,
 //                 "ts": ..., "result": { ... } }
-//               { "id": "...", "domain": "scene", "op": "play", "ok": false,
+//               { "id": "<filename>", "domain": "core", "op": "play", "ok": false,
 //                 "ts": ..., "error": "..." }
 //
-//  Domains: read | execute | log | core. Each domain is handled by its own
-//  *Handler.cs file; the core routes on the `domain` field. Unknown
-//  domains/ops are rejected with an error response.
+//  JSON domains: read | log | core. The write path is a dropped .cs file,
+//  not a JSON command. Unknown domains/ops are rejected with an error.
 // ============================================================================
 #if UNITY_EDITOR
 using System;
@@ -46,26 +45,9 @@ namespace DSH.UnityBridge
                 op = obj["op"].Value,
                 args = (obj["args"] as JSONObject) ?? new JSONObject(),
             };
-            if (string.IsNullOrEmpty(cmd.domain)) throw new Exception("missing 'domain' (read|execute|log|core)");
+            if (string.IsNullOrEmpty(cmd.domain)) throw new Exception("missing 'domain' (read|log|core)");
             if (string.IsNullOrEmpty(cmd.op)) throw new Exception("missing 'op'");
             return cmd;
-        }
-
-        /// <summary>
-        /// A dropped <c>in/&lt;id&gt;.cs</c> file: same as execute.cs, with
-        /// <c>args.code</c> = the file body. JSON envelope unchanged.
-        /// </summary>
-        public static BridgeCommand FromCsFile(string id, string code)
-        {
-            var args = new JSONObject();
-            args["code"] = code ?? "";
-            return new BridgeCommand
-            {
-                id = id,
-                domain = "execute",
-                op = "cs",
-                args = args,
-            };
         }
     }
 

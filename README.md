@@ -37,9 +37,9 @@ The runtime queue lives under the Unity project's `Library/` folder — the same
 place Unity keeps its own cache, so it is machine-local, never committed, and
 safe to wipe (the bridge recreates it on init):
 
-- `in/` — command files `<id>.json`, written by the agent
+- `in/` — command files `<op>-<yyyyMMdd-HHmmssfff>.json` or `.cs`, written by the agent
 - `running/` — at most one claimed command; moved here **before** execute (at-most-once). Leftovers after a domain reload are reaped as `"interrupted by domain reload"`
-- `out/` — response files `<id>.json`, written by Unity (pruned after 120s)
+- `out/` — response files `<op>-<yyyyMMdd-HHmmssfff>.json`, written by Unity (pruned after 120s)
 - `done/` — processed commands moved here (pruned after 600s)
 - `status/heartbeat.json` — refreshed every 1s; agent uses it to detect "online"
 - `status/log.json` — last 300 captured console lines
@@ -47,16 +47,17 @@ safe to wipe (the bridge recreates it on init):
 ## Protocol (v3)
 
 Ops are namespaced by **domain** (`read | execute | log | core`); each domain
-is handled by its own `*Handler.cs` file in the package. Command envelope:
+is handled by its own `*Handler.cs` file in the package. Command files are
+named `<op>-<yyyyMMdd-HHmmssfff>` (local time; filename is the correlation id; JSON has no `id`):
 
 ```json
-{ "id": "m1abc-xyzw", "domain": "read", "op": "hierarchy", "args": { "path": "Assets/Scenes/SampleScene.unity/Player" } }
+{ "domain": "read", "op": "hierarchy", "args": { "path": "Assets/Scenes/SampleScene.unity/Player" } }
 ```
 
-Response envelope:
+Response envelope (`id` echoes the filename stem):
 
 ```json
-{ "id": "m1abc-xyzw", "domain": "read", "op": "hierarchy", "ok": true, "ts": 1699999999.123, "result": { "path": "...", "kind": "gameObject", ... } }
+{ "id": "hierarchy-20260816-003712189", "domain": "read", "op": "hierarchy", "ok": true, "ts": 1786811641.8, "result": { "path": "...", "kind": "gameObject", ... } }
 ```
 
 Errors: `"ok": false, "error": "..."`.
@@ -92,16 +93,14 @@ ambiguous — `read` then fails with a candidate list, or disambiguate with an
 
 ### execute — the single write path
 
-| op | args | effect |
-|---|---|---|
-| `execute.cs` | `code`, `imports?`, `data?` | compile + run agent-written C# with Roslyn (in memory, no domain reload) |
+Drop a `.cs` file into `in/` (`cs-<yyyyMMdd-HHmmssfff>.cs`). There is no JSON
+envelope: `code` / `imports` / `data` were removed.
 
-Contract: the code must define a static class named `Entry` with a
-`public static object Main(object args)` method. `args` is the parsed `data`
-JSON (cast to `Dictionary<string,object>` to read keys). The return value
-becomes `result.value`, recursively converted to a JSON-serializable graph:
-scalars pass through, `IDictionary`/collections recurse, `UnityEngine.Object`
-becomes `{type, name, instance}`.
+Contract: the file must define a static class named `Entry` with a
+`public static object Main(object args)` method. `args` is always null. The
+return value becomes `result.value`, recursively converted to a
+JSON-serializable graph: scalars pass through, `IDictionary`/collections
+recurse, `UnityEngine.Object` becomes `{type, name, instance}`.
 
 - Language version: C# 9 (Roslyn 3.8). `download.js` in the package folder
   re-fetches the packages from nuget.org — bump the versions there to upgrade.
@@ -109,8 +108,8 @@ becomes `{type, name, instance}`.
   UnityEditor, your own scripts, ...).
 - Auto-prepended `using` directives: `System`, `System.Collections.Generic`,
   `System.Linq`, `System.Text`, `System.IO`, `System.Threading`,
-  `System.Text.RegularExpressions`, `UnityEngine`, `UnityEditor`; pass extra
-  namespaces via `imports` (comma-separated).
+  `System.Text.RegularExpressions`, `UnityEngine`, `UnityEditor`. Extra
+  namespaces go in the file.
 - Compile errors and runtime exceptions come back as `"ok": false` with
   diagnostics in `error`.
 - Implementation note: `CSharpCompilation` → emit to memory →
@@ -129,7 +128,7 @@ becomes `{type, name, instance}`.
 | op | args | effect |
 |---|---|---|
 | `core.ping` | — | round-trip check (`result.pong` = true) |
-| `core.reload` | — | write `{reloading: true}` first, then `AssetDatabase.Refresh()` + `RequestScriptCompilation()`. Does not save scenes or assets. This is the op that may destroy the running domain; in-flight `execute.cs` that triggers a reload is reaped as `"interrupted by domain reload"` (never retried) |
+| `core.refresh` | — | write `{refreshing: true}` first, then `AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate)`. Does not save. Script reimports may destroy the running domain; in-flight `execute.cs` that triggers a reload is reaped as `"interrupted by domain reload"` (never retried) |
 | `core.status` | — | snapshot: `playing`, `paused`, `isCompiling`, `isUpdating`, `activeScene`, `openScenes[]`, `selection[]`, `projectPath`, `unityVersion`, `buildTarget` |
 | `core.menuitem` | `item` | check the menu exists (and is enabled), then `ExecuteMenuItem`. Missing or disabled → `"ok": false` |
 | `core.openscene` | `path`, `mode?` (`single`/`additive`) | open a scene; `.unity` suffix optional |

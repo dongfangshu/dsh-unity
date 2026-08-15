@@ -4,7 +4,7 @@
 //  Protocol v2 (see README at the project root for the full doc):
 //
 //    <project>/Library/UnityBridge/
-//      in/      command files  <id>.json | <id>.cs  (written by the agent)
+//      in/      command files  <op>-<yyyyMMdd-HHmmssfff>.json | .cs
 //      running/ at most one claimed command (claimed before execute)
 //      out/     response files <id>.json   (written here, pruned after 120s)
 //      done/    processed command files    (pruned after 600s)
@@ -18,24 +18,22 @@
 //
 //    domain "read"    -> ReadHandler.cs    (assets / hierarchy / select —
 //                                           the single read interface)
-//    domain "execute" -> ExecuteHandler.cs (cs — Roslyn, in-memory; the
-//                                           single write path). A dropped
-//                                           in/<id>.cs file is the same op
-//                                           with args.code = file body.
+//    domain "execute" -> ExecuteHandler.cs (dropped in/*.cs — Roslyn,
+//                                           in-memory; the single write path)
 //    domain "log"     -> LogHandler.cs     (log — console ring tail)
-//    domain "core"    -> CoreHandler.cs    (ping, reload, status, menuitem,
+//    domain "core"    -> CoreHandler.cs    (ping, refresh, status, menuitem,
 //                                           openscene, removescene, savescene,
 //                                           saveassets, play, stop, pause,
 //                                           resume, step)
 //
-//  Command:   { "id": "...", "domain": "scene", "op": "play", "args": { } }
-//  Response:  { "id": "...", "domain": "scene", "op": "play", "ok": true,
+//  Command:   { "domain": "core", "op": "play", "args": { } }
+//  Response:  { "id": "<filename>", "domain": "core", "op": "play", "ok": true,
 //               "ts": ..., "result": { ... } }
 //
 //  Claim-then-execute: in/ → running/ (at most one) before Execute, then
 //  out/ + done/. Leftovers in running/ after a domain reload are reaped as
-//  "interrupted by domain reload" and never retried. core.reload writes its
-//  response before requesting compilation so the reload cannot swallow it.
+//  "interrupted by domain reload" and never retried. core.refresh writes its
+//  response before ForceUpdate import so a domain reload cannot swallow it.
 //
 //  This file is the CORE ONLY: the poll loop, domain routing, heartbeat, log
 //  ring and file utilities. All domain logic lives in the *Handler.cs files.
@@ -168,23 +166,32 @@ namespace DSH.UnityBridge
             try
             {
                 text = File.ReadAllText(runningPath);
-                var cmd = IsCsCommand(name)
-                    ? BridgeCommand.FromCsFile(id, text)
-                    : BridgeCommand.Parse(text);
-                if (!string.IsNullOrEmpty(cmd.id)) id = cmd.id;
-                domain = cmd.domain;
-                op = cmd.op;
-                // core.reload: write the response and leave running/ before
-                // requesting compilation, so a domain reload cannot swallow it.
-                if (domain == "core" && op == "reload")
+                object result;
+                if (IsCsCommand(name))
                 {
-                    WriteResponse(id, domain, op, true,
-                        new Dictionary<string, object> { ["reloading"] = true }, null);
-                    FinishRunning(runningPath, name);
-                    Execute(cmd.domain, cmd.op, cmd.args);
-                    return;
+                    domain = "execute";
+                    op = "cs";
+                    result = ExecuteHandler.Run(text);
                 }
-                object result = Execute(cmd.domain, cmd.op, cmd.args);
+                else
+                {
+                    var cmd = BridgeCommand.Parse(text);
+                    domain = cmd.domain;
+                    op = cmd.op;
+                    if (domain == "execute")
+                        throw new Exception("execute is a dropped .cs file, not a JSON command");
+                    // core.refresh: write the response and leave running/ before
+                    // ForceUpdate import, so a domain reload cannot swallow it.
+                    if (domain == "core" && op == "refresh")
+                    {
+                        WriteResponse(id, domain, op, true,
+                            new Dictionary<string, object> { ["refreshing"] = true }, null);
+                        FinishRunning(runningPath, name);
+                        Execute(cmd.domain, cmd.op, cmd.args);
+                        return;
+                    }
+                    result = Execute(cmd.domain, cmd.op, cmd.args);
+                }
                 WriteResponse(id, domain, op, true, result, null);
             }
             catch (Exception ex)
@@ -225,7 +232,6 @@ namespace DSH.UnityBridge
                     {
                         string text = File.ReadAllText(file);
                         var cmd = BridgeCommand.Parse(text);
-                        if (!string.IsNullOrEmpty(cmd.id)) id = cmd.id;
                         if (!string.IsNullOrEmpty(cmd.domain)) domain = cmd.domain;
                         if (!string.IsNullOrEmpty(cmd.op)) op = cmd.op;
                     }
@@ -288,7 +294,6 @@ namespace DSH.UnityBridge
             switch (domain)
             {
                 case "read": return ReadHandler.Handle(op, args);
-                case "execute": return ExecuteHandler.Handle(op, args);
                 case "log": return LogHandler.Handle(op, args);
                 case "core": return CoreHandler.Handle(op, args);
                 default: throw new Exception("unknown domain: " + domain);

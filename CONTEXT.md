@@ -40,14 +40,14 @@ read 对层级结构的一次读取只返回所寻址节点的直接一层；下
 ## 写
 
 **execute**:
-唯一的写路径；增删改都通过它执行。C# 源码经 Roslyn 编译进内存执行，入口契约为 `public static class Entry { public static object Main(object args) }`。
-_Avoid_: 特权写 op、script.cs / script.eval（旧名）
+唯一的写路径；增删改都通过丢入 `in/*.cs` 执行（不是 JSON 命令）。C# 源码经 Roslyn 编译进内存，入口契约为 `public static class Entry { public static object Main(object args) }`。
+_Avoid_: 特权写 op、JSON `execute.cs` 信封、script.cs / script.eval（旧名）
 
 ## 内置
 
 **core**:
-编辑器会话操作的命名空间，封闭集合：`ping / reload / status / menuitem / openscene / removescene / savescene / saveassets / play / stop / pause / resume / step`。会话操作指编辑器菜单/工具栏级的能力，与对象类型无关。
-`reload` 只做导入 + 编译（随后 domain reload），不落盘；要留下内存里的改动，先 `savescene` / `saveassets` 等到 `ok`，再发 `reload`。`reload` 仍是语义特殊的一条：先写出响应，再请求编译。execute 路径上若触发 reload，正在跑的程序集会被杀掉、来不及自己写响应——靠认领与打断诊断收场，而不是在脚本里调用 reload。
+编辑器会话操作的命名空间，封闭集合：`ping / refresh / status / menuitem / openscene / removescene / savescene / saveassets / play / stop / pause / resume / step`。会话操作指编辑器菜单/工具栏级的能力，与对象类型无关。
+`refresh` 是 `AssetDatabase.Refresh(ForceUpdate)`，不落盘；改了项目里已有脚本之后才发。脚本被强制导入后会编译（随后 domain reload）。要留下内存里的改动，先 `savescene` / `saveassets` 等到 `ok`，再发 `refresh`。`refresh` 仍是语义特殊的一条：先写出响应，再导入。execute 路径上若触发 reload，正在跑的程序集会被杀掉、来不及自己写响应——靠认领与打断诊断收场，而不是在脚本里调用 refresh。
 _Avoid_: 按 Unity 类型扩展 core、场景域/资产域 op（旧名）
 
 **log**:
@@ -57,7 +57,7 @@ _Avoid_: 日志文件读取（Editor.log 是未来扩展）
 ## 协议
 
 **文件队列协议**:
-主机（agent）与编辑器之间唯一的通信方式：JSON 文件经 `Library/UnityBridge/` 的 in/running/out/done/status 目录单向流动，无网络端口。
+主机（agent）与编辑器之间唯一的通信方式：文件经 `Library/UnityBridge/` 的 in/running/out/done/status 目录单向流动，无网络端口。命令文件名为 `<op>-<yyyyMMdd-HHmmssfff>`（本地时间，`.json` 或 `.cs`）；回包 `out/` 用同一段名字。执行只看 `domain`/`op`（或 `.cs` 全文），不看这段名字。
 
 **认领**:
 一条命令必须先从 in/ 移入 running/ 才执行；running/ 里至多一条。认领先于执行，所以同一条命令不会因 domain reload 再跑一遍（至多一次）。

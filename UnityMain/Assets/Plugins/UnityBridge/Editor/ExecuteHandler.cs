@@ -1,15 +1,13 @@
 // ============================================================================
-//  ExecuteHandler.cs — `execute` domain: the bridge's single write path.
+//  ExecuteHandler.cs — dropped in/*.cs files: the bridge's single write path.
 //
-//  Op: cs
-//  (routed here by UnityBridge.Execute on the command's `domain` field)
-//
-//  `cs` compiles and executes agent-written C# with Roslyn (in memory, no
-//  domain reload): args.code = C# source, args.imports = extra namespaces,
-//  args.data = JSON object passed to Entry.Main(object args).
+//  Roslyn compiles the file body in memory (no domain reload) and invokes
+//  `public static class Entry { public static object Main(object args) }`.
+//  `args` is always null. Extra namespaces belong in the file; defaults are
+//  prepended (System, UnityEngine, UnityEditor, ...).
 //
 //  Capability boundary (see CONTEXT.md at the repo root): every
-//  create/update/delete in the editor is expressed through this op —
+//  create/update/delete in the editor is expressed through this path —
 //  there are no privileged write ops.
 // ============================================================================
 #if UNITY_EDITOR
@@ -22,7 +20,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using SimpleJSON;
 using Assembly = System.Reflection.Assembly;
 
 namespace DSH.UnityBridge
@@ -39,37 +36,16 @@ namespace DSH.UnityBridge
             catch { }
         }
 
-        public static object Handle(string op, JSONObject args)
+        public static object Run(string code)
         {
-            switch (op)
-            {
-                case "cs":
-                    return RunCs(UnityBridge.GetString(args, "code"), UnityBridge.GetString(args, "imports"), UnityBridge.GetString(args, "data"));
-                default:
-                    throw new Exception("unknown op '" + op + "' in domain execute");
-            }
-        }
+            if (string.IsNullOrEmpty(code)) throw new Exception("dropped .cs file is empty");
 
-        // ------------------------------------------------------------------
-        // cs — compile and execute agent-written C# with Roslyn (in memory,
-        // no domain reload). CSharpCompilation -> Assembly.Load -> reflection.
-        // Contract: code must define `public static class Entry { public static
-        // object Main(object args) { ... } }`. args = parsed `data` JSON.
-        // ------------------------------------------------------------------
-        static Dictionary<string, object> RunCs(string code, string importsArg, string dataArg)
-        {
-            if (string.IsNullOrEmpty(code)) throw new Exception("cs requires args.code (C# source text)");
-
-            var imports = new List<string>
+            var imports = new[]
             {
                 "System", "System.Collections.Generic", "System.Linq", "System.Text",
                 "System.IO", "System.Threading", "System.Text.RegularExpressions",
                 "UnityEngine", "UnityEditor"
             };
-            if (!string.IsNullOrEmpty(importsArg))
-                foreach (string ns in importsArg.Split(','))
-                    if (!string.IsNullOrWhiteSpace(ns)) imports.Add(ns.Trim());
-
             var sb = new StringBuilder();
             foreach (string ns in imports)
                 sb.Append("using ").Append(ns).Append(";\n");
@@ -84,19 +60,12 @@ namespace DSH.UnityBridge
                 _compiled[key] = main;
             }
 
-            object args = null;
-            if (!string.IsNullOrEmpty(dataArg))
-            {
-                try { args = BridgeJson.ToPlainObject(JSON.Parse(dataArg)); }
-                catch { args = null; }
-            }
-
             object result;
             try
             {
                 ParameterInfo[] ps = main.GetParameters();
                 if (ps.Length == 0) result = main.Invoke(null, null);
-                else if (ps.Length == 1 && ps[0].ParameterType == typeof(object)) result = main.Invoke(null, new[] { args });
+                else if (ps.Length == 1 && ps[0].ParameterType == typeof(object)) result = main.Invoke(null, new object[] { null });
                 else throw new Exception("Entry.Main must take no parameters or one 'object' parameter");
             }
             catch (TargetInvocationException tie)

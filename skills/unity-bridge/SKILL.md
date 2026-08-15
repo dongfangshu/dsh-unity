@@ -1,6 +1,6 @@
 ---
 name: unity-bridge
-description: Drive a local Unity editor through the DSH Unity Bridge file-queue protocol v3 (read: unified read interface over assets/hierarchy/selection; execute: Roslyn C# as the single write path; log: console ring; core: editor-session ops incl. play mode, scenes, reload, status, menu items). Use when the user asks you to control, inspect, script, or test a Unity project on this machine, or when Unity is running with the bridge installed.
+description: Drive a local Unity editor through the DSH Unity Bridge file-queue protocol v3 (read: unified read interface over assets/hierarchy/selection; execute: Roslyn C# as the single write path; log: console ring; core: editor-session ops incl. play mode, scenes, refresh, status, menu items). Use when the user asks you to control, inspect, script, or test a Unity project on this machine, or when Unity is running with the bridge installed.
 ---
 
 # Unity Bridge
@@ -26,9 +26,9 @@ the project itself.
 
 ```
 <project>/Library/UnityBridge/
-  in/       command files  <id>.json | <id>.cs  (you write here)
+  in/       command files  <op>-<yyyyMMdd-HHmmssfff>.json | .cs
   running/  at most one claimed command (bridge moves here before execute)
-  out/      response files <id>.json   (bridge writes here; pruned after 120s)
+  out/      response files  <op>-<yyyyMMdd-HHmmssfff>.json  (pruned after 120s)
   done/     processed command files    (pruned after 600s)
   status/heartbeat.json                (refreshed every 1s while editor is open)
   status/log.json                      (last 300 captured console lines)
@@ -43,34 +43,44 @@ to start Unity.
 ## 2. Protocol (v3)
 
 The capability surface is exactly **four domains**: `read | execute | log |
-core`. Write a command file `in/<id>.json`:
+core`. Write a command file named **`<op>-<yyyyMMdd-HHmmssfff>`** (local date
++ time, milliseconds so two commands in the same second do not collide).
+Execution uses `domain`/`op` (or the `.cs` body), not the filename. The name
+is only for matching `out/`:
 
-```json
-{ "id": "my-1", "domain": "read", "op": "hierarchy", "args": { "path": "Assets/Scenes/SampleScene.unity/Player" } }
+```
+in/hierarchy-20260816-003712189.json
 ```
 
-Or drop C# directly as `in/<id>.cs` (see execute below). Response is always
-`out/<id>.json`.
+```json
+{ "domain": "read", "op": "hierarchy", "args": { "path": "Assets/Scenes/SampleScene.unity/Player" } }
+```
 
-**Write atomically:** write `in/<id>.<ext>.tmp`, then rename to `in/<id>.<ext>`.
-Do not write the final path in place — a half-written file is claimed and
-fails. The bridge also ignores files younger than 150 ms as a settle window.
+Or drop C# as `in/cs-20260816-003712189.cs` (see execute below). Response is
+always `out/<same-stem>.json`.
+
+**Write atomically:** write `in/<stem>.<ext>.tmp`, then rename to
+`in/<stem>.<ext>`. Do not write the final path in place — a half-written file
+is claimed and fails. The bridge also ignores files younger than 150 ms as a
+settle window.
 
 The bridge picks it up within ~0.2 s, **claims** it (`in/` → `running/`; at
 most one in flight), executes it on the editor main thread, writes
-`out/my-1.json`, then moves it to `done/`:
+`out/hierarchy-20260816-003712189.json`, then moves it to `done/`:
 
 ```json
-{ "id": "my-1", "domain": "read", "op": "hierarchy", "ok": true, "ts": 1786773207.1, "result": { "path": "...", "kind": "gameObject" } }
+{ "id": "hierarchy-20260816-003712189", "domain": "read", "op": "hierarchy", "ok": true, "ts": 1786811641.8, "result": { "path": "...", "kind": "gameObject" } }
 ```
 
 Errors: `"ok": false` with `"error": "..."` (compile errors carry line numbers).
 
 Rules:
-- **Unique `id`** per command (the filename without extension); poll
-  `out/<id>.json` until it appears. A response is only yours when
-  `resp.id === id`.
-- `domain` is required on JSON commands: `read | execute | log | core`.
+- **Filename = `<op>-<yyyyMMdd-HHmmssfff>`**. Poll `out/<stem>.json`. A
+  response is yours when the filename (and `resp.id`) matches the stem you
+  wrote. Do not reuse a stem.
+- JSON commands do **not** need an `id` field; if present it is ignored.
+  `domain` is required: `read | log | core`. Writes are dropped `.cs` files,
+  not JSON.
 - `args` is optional (`{}` when none).
 - Stale files in `in/` are pruned after 10 min; `out/` after 120 s.
   `running/` is not pruned — leftovers are reaped on the next editor load.
@@ -79,12 +89,12 @@ Rules:
 Helper pattern (atomic write + poll for the response):
 
 ```powershell
-$id = "my-1"
-$tmp = "in\$id.json.tmp"
-Set-Content -Path $tmp -Value '{"id":"my-1","domain":"read","op":"select","args":{}}' -Encoding UTF8 -NoNewline
-Move-Item -LiteralPath $tmp -Destination "in\$id.json"
+$stem = "select-$(Get-Date -Format 'yyyyMMdd-HHmmssfff')"
+$tmp = "in\$stem.json.tmp"
+Set-Content -Path $tmp -Value '{"domain":"read","op":"select","args":{}}' -Encoding UTF8 -NoNewline
+Move-Item -LiteralPath $tmp -Destination "in\$stem.json"
 $deadline = (Get-Date).AddSeconds(30)
-while ((Get-Date) -lt $deadline) { if (Test-Path "out\$id.json") { Get-Content "out\$id.json" -Raw; break }; Start-Sleep -Milliseconds 300 }
+while ((Get-Date) -lt $deadline) { if (Test-Path "out\$stem.json") { Get-Content "out\$stem.json" -Raw; break }; Start-Sleep -Milliseconds 300 }
 ```
 
 ## 3. Ops reference
@@ -118,22 +128,8 @@ segment (the session-stable id printed on every node).
 Every create/update/delete is a C# script. The code must define
 `public static class Entry { public static object Main(object args) { ... } }`.
 
-**Prefer dropping the source as `in/<id>.cs`** (filename = id, body = code).
-The bridge treats it as `execute.cs`; poll `out/<id>.json`. This avoids stuffing
-C# into a JSON string. The JSON envelope still works unchanged:
-
-```json
-{
-  "id": "cube-1",
-  "domain": "execute",
-  "op": "cs",
-  "args": {
-    "code": "public static class Entry { public static object Main(object args) { var c = GameObject.CreatePrimitive(PrimitiveType.Cube); c.name = \"agent-cube\"; c.transform.position = new Vector3(1, 2, 3); return \"created \" + c.name; } }"
-  }
-}
-```
-
-Dropped `.cs` file (write `in/cube-1.cs.tmp` then rename to `in/cube-1.cs`):
+Drop the source as `in/cs-<yyyyMMdd-HHmmssfff>.cs` (write `.tmp` then rename).
+The bridge treats it as `execute.cs`; poll `out/cs-<yyyyMMdd-HHmmssfff>.json`.
 
 ```csharp
 public static class Entry {
@@ -146,13 +142,10 @@ public static class Entry {
 }
 ```
 
-- `args` = the parsed `data` JSON as a plain object; cast to
-  `Dictionary<string, object>` to read keys. Scalars become `string` / `bool`
-  / `long` / `double` / `null`.
-- Default `using` directives are auto-prepended: `System`,
-  `System.Collections.Generic`, `System.Linq`, `System.Text`, `System.IO`,
-  `System.Threading`, `System.Text.RegularExpressions`, `UnityEngine`,
-  `UnityEditor`. Extra namespaces go in `imports` (comma-separated).
+- `Main`'s `args` is null for a dropped `.cs` file. Put extra `using`s in the
+  file; these are auto-prepended: `System`, `System.Collections.Generic`,
+  `System.Linq`, `System.Text`, `System.IO`, `System.Threading`,
+  `System.Text.RegularExpressions`, `UnityEngine`, `UnityEditor`.
 - Every assembly loaded in the editor is referenced (UnityEngine, UnityEditor,
   your project scripts, ...).
 - The return value becomes `result.value`, recursively converted to JSON:
@@ -173,7 +166,7 @@ public static class Entry {
 | op | args | effect |
 |---|---|---|
 | `core.ping` | — | round-trip check (`result.pong` = true) |
-| `core.reload` | — | import + recompile (domain reload). Does **not** save. After editing project C# on disk, send this and wait for the heartbeat (10–30 s) |
+| `core.refresh` | — | `AssetDatabase.Refresh(ForceUpdate)`. Does **not** save. After editing an existing project C# file, send this and wait for the heartbeat (10–30 s) |
 | `core.status` | — | snapshot: `playing`, `paused`, `isCompiling`, `isUpdating`, `activeScene`, `openScenes[]`, `selection[]`, `projectPath`, `unityVersion`, `buildTarget` |
 | `core.menuitem` | `item` | execute a menu item by exact path, e.g. `"File/Save Project"`. Missing or disabled path → `"ok": false` (validated before execute) |
 | `core.openscene` | `path`, `mode?` (`single`/`additive`) | open a scene (`.unity` optional), e.g. `"Assets/Scenes/SampleScene.unity"` |
@@ -194,15 +187,16 @@ public static class Entry {
 - **Create / modify / delete anything** → `execute.cs` (add components, move
   objects, spawn prefabs, `AssetDatabase.DeleteAsset`, ...). Asset edits that
   should persist need `EditorUtility.SetDirty` in the script, then
-  `core.saveassets` (wait for `ok`) — do not fold that into reload.
+  `core.saveassets` (wait for `ok`) — do not fold that into refresh.
 - **Persist the open scene** → `core.savescene` (wait for `ok`). Skip this to
   keep in-memory scene edits discardable.
 - **Run a play test** → `core.play`, wait ~3 s, inspect via `read` /
   `log.log`, then `core.stop`.
-- **After editing any C# file in the project** → `core.reload` only (the file
-  is already on disk). Wait for the heartbeat to resume (10–30 s), then
-  re-check `core.status`. If you also mutated assets or the scene, save those
-  first and wait for `ok`, then reload. Never queue save + reload together.
+- **After editing an existing C# file in the project** → `core.refresh` only
+  (the file is already on disk; ForceUpdate reimports it). Wait for the
+  heartbeat to resume (10–30 s), then re-check `core.status`. If you also
+  mutated assets or the scene, save those first and wait for `ok`, then
+  refresh. Never queue save + refresh together.
 - **If a read is ambiguous** → it lists candidates with `instance` ids; retry
   with the `@<instance>` segment.
 - **User pasted a `unity-bridge` JSON** (Hierarchy right-click **Copy for Agent**,
@@ -211,13 +205,17 @@ public static class Entry {
 
 ## 5. Troubleshooting
 
+- **Protocol self-test** — from this folder, Unity open: `pwsh ./test-bridge.ps1`.
+  `-SkipPlay` / `-SkipRefresh` skip those; `-IncludeSceneOps` also hits
+  `openscene` (can freeze on a save dialog).
 - **`"ok": false` / timeout** — bridge offline: editor closed, package not
   installed, or `Tools > Unity Bridge` disabled. **Ask the user to open the
   project** (this skill never launches Unity).
-- **No response after `core.reload`** — expected: the editor domain-reloads
-  after writing `{reloading: true}`; wait for the heartbeat file to refresh.
+- **No response after `core.refresh`** — expected: if scripts reimported, the
+  editor domain-reloads after writing `{refreshing: true}`; wait for the
+  heartbeat file to refresh.
 - **`"interrupted by domain reload"`** — the command was claimed then killed
-  mid-execute (script triggered a compile, or reload landed while it ran).
+  mid-execute (script triggered a compile, or refresh landed while it ran).
   It will **not** be retried; send it again if you still need the effect.
 - **Compile errors in `error`** — the C# failed to compile; fix per the
   diagnostics (positions are `(line, col)`).

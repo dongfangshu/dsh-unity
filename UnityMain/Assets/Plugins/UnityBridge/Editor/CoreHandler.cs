@@ -1,7 +1,7 @@
 // ============================================================================
 //  CoreHandler.cs — `core` domain: editor-session operations (a closed set).
 //
-//  Ops: ping | reload | status | menuitem | openscene | removescene |
+//  Ops: ping | refresh | status | menuitem | openscene | removescene |
 //       savescene | saveassets | play | stop | pause | resume | step
 //  (routed here by UnityBridge.Execute on the command's `domain` field)
 //
@@ -10,11 +10,12 @@
 //  types. It is a closed set: new capabilities are expressed through
 //  execute.cs or new read schemes, not new core ops.
 //
-//  `reload` is the one op that is allowed to kill the running domain: the
-//  queue claims the command, this handler returns `{reloading:true}`, the
-//  response is written, then compilation proceeds. An execute.cs that
-//  triggers a reload itself never gets to write its own response — leftovers
-//  in running/ are reaped as "interrupted by domain reload".
+//  `refresh` is the one op that is allowed to kill the running domain: the
+//  queue claims the command, this handler returns `{refreshing:true}`, the
+//  response is written, then ForceUpdate import proceeds (script changes
+//  trigger a domain reload). An execute.cs that triggers a reload itself
+//  never gets to write its own response — leftovers in running/ are reaped
+//  as "interrupted by domain reload".
 // ============================================================================
 #if UNITY_EDITOR
 using System;
@@ -24,7 +25,6 @@ using System.Linq;
 using System.Reflection;
 using SimpleJSON;
 using UnityEditor;
-using UnityEditor.Compilation;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -39,14 +39,12 @@ namespace DSH.UnityBridge
             {
                 case "ping":
                     return new Dictionary<string, object> { ["pong"] = true, ["bridge"] = UnityBridge.Version };
-                case "reload":
-                    // Import + compile only. Does not save scenes or assets —
-                    // persist first with savescene / saveassets if you want
-                    // in-memory edits to survive. Respond first; compilation
-                    // happens after this returns (the queue has claimed it).
-                    AssetDatabase.Refresh();
-                    CompilationPipeline.RequestScriptCompilation();
-                    return new Dictionary<string, object> { ["reloading"] = true };
+                case "refresh":
+                    // Force-reimport from disk. Does not save. Script changes
+                    // then compile (domain reload). Persist first with
+                    // savescene / saveassets if in-memory edits should survive.
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                    return new Dictionary<string, object> { ["refreshing"] = true };
                 case "status":
                     return Status();
                 case "menuitem":
