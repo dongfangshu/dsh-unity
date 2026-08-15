@@ -155,6 +155,24 @@ public static class Entry {
 - Edit-mode objects are not persistent — they are lost on domain reload or
   scene close. Runtime game objects belong in Play mode.
 
+**Screenshot (Scene View / Game camera).** There is no screenshot op. Copy
+`skills/unity-bridge/capture-view.cs` into `in/cs-<yyyyMMdd-HHmmssfff>.cs`
+(write `.tmp` then rename). Play mode renders `Camera.main` (else the first
+enabled camera); edit mode renders `SceneView.lastActiveSceneView` (a Scene
+View window must be open). The PNG is always written to
+`<project>/Library/UnityBridge/status/view.png` (overwritten each capture).
+
+When `out/` comes back `ok` and `result.value.kind` is `"image"`, **Read the
+file at `result.value.path` as an image** — do not dump the PNG into JSON and
+do not treat the path string as the picture. Example `result.value`:
+
+```json
+{ "kind": "image", "path": "D:/DSH Unity/UnityMain/Library/UnityBridge/status/view.png" }
+```
+
+You can also append the same capture at the end of a work script (`Main`
+returns the image dict) so layout + screenshot is one round-trip.
+
 ### log — editor console
 
 | op | args | effect |
@@ -190,8 +208,10 @@ public static class Entry {
   `core.saveassets` (wait for `ok`) — do not fold that into refresh.
 - **Persist the open scene** → `core.savescene` (wait for `ok`). Skip this to
   keep in-memory scene edits discardable.
+- **Look at the Scene / Game view** → drop `capture-view.cs` as
+  `execute.cs`, then Read `result.value.path` as an image.
 - **Run a play test** → `core.play`, wait ~3 s, inspect via `read` /
-  `log.log`, then `core.stop`.
+  `log.log` / screenshot, then `core.stop`.
 - **After editing an existing C# file in the project** → `core.refresh` only
   (the file is already on disk; ForceUpdate reimports it). Wait for the
   heartbeat to resume (10–30 s), then re-check `core.status`. If you also
