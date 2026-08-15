@@ -47,3 +47,6 @@ Thumbs.db
 # NOTE: anchored to the repo root (/plugins/) — an unanchored `plugins/`
 # would also match Assets/Plugins/... on case-insensitive filesystems.
 /plugins/
+/.agents
+/.claude
+/.scratch

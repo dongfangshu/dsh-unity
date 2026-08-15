@@ -171,6 +171,9 @@ Every create/update/delete is a C# script. The code must define
   the heartbeat to resume (10–30 s), then re-check `core.status`.
 - **If a read is ambiguous** → it lists candidates with `instance` ids; retry
   with the `@<instance>` segment.
+- **User pasted a `unity-bridge` JSON** (Hierarchy right-click **Copy for Agent**,
+  under Copy) → copied editor objects. `read.hierarchy` each `path`, or
+  `read.assets` for Project-window copies. Use `@instance` if names collide.
 
 ## 5. Troubleshooting
 

@@ -113,7 +113,7 @@ namespace DSH.UnityBridge
                     ["kind"] = "scene",
                     ["name"] = scene.name,
                     ["children"] = scene.GetRootGameObjects()
-                        .Select(go => GameObjectNode(go)).ToList()
+                        .Select(go => GameObjectEntry(go)).ToList()
                 };
             }
 
@@ -180,7 +180,7 @@ namespace DSH.UnityBridge
             {
                 if (obj == null) continue;
                 if (obj is GameObject go)
-                    list.Add(GameObjectNode(go));
+                    list.Add(GameObjectEntry(go));
                 else
                     list.Add(new Dictionary<string, object>
                     {
@@ -195,22 +195,41 @@ namespace DSH.UnityBridge
         }
 
         // ------------------------------------------------------------------
-        // Node building
+        // Node building — ls semantics: the addressed node lists one level of
+        // children as entries (no grandchildren). Descend by reading again.
         // ------------------------------------------------------------------
         static Dictionary<string, object> GameObjectNode(GameObject go, string path = null)
+        {
+            var node = GameObjectEntry(go, path);
+            string nodePath = (string)node["path"];
+            var transforms = go.transform.Cast<Transform>().ToList();
+            var counts = new Dictionary<string, int>();
+            foreach (Transform t in transforms)
+            {
+                string n = t.gameObject.name;
+                int c;
+                counts[n] = counts.TryGetValue(n, out c) ? c + 1 : 1;
+            }
+            var children = new List<object>();
+            foreach (Transform t in transforms)
+            {
+                string seg = t.gameObject.name;
+                if (counts[seg] > 1) seg += "@" + t.gameObject.GetInstanceID();
+                children.Add(GameObjectEntry(t.gameObject, nodePath + "/" + seg));
+            }
+            node["children"] = children;
+            return node;
+        }
+
+        /// <summary>Canonical node entry for a GameObject (no children). Used
+        /// by read and by Copy for Agent.</summary>
+        internal static Dictionary<string, object> AddressFor(GameObject go) => GameObjectEntry(go);
+
+        static Dictionary<string, object> GameObjectEntry(GameObject go, string path = null)
         {
             string scenePath = go.scene.IsValid() ? go.scene.path : "";
             if (path == null)
                 path = scenePath.Length > 0 ? scenePath + "/" + CanonicalPath(go) : go.name;
-
-            var children = go.transform.Cast<Transform>()
-                .Select(t =>
-                {
-                    string seg = t.gameObject.name;
-                    if (go.transform.Cast<Transform>().Count(x => x.gameObject.name == seg) > 1)
-                        seg += "@" + t.gameObject.GetInstanceID();
-                    return GameObjectNode(t.gameObject, path + "/" + seg);
-                }).ToList();
 
             return new Dictionary<string, object>
             {
@@ -221,8 +240,7 @@ namespace DSH.UnityBridge
                 ["activeSelf"] = go.activeSelf,
                 ["components"] = go.GetComponents<Component>()
                     .Where(c => c != null)
-                    .Select(c => c.GetType().Name).ToList(),
-                ["children"] = children
+                    .Select(c => c.GetType().Name).ToList()
             };
         }
 
