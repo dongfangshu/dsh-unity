@@ -15,7 +15,9 @@
 //
 //  Commands are namespaced by domain; each domain has its own handler file:
 //
-//    domain "core"    -> CoreHandler.cs    (ping, status, log, reload, menu)
+//    domain "core"    -> CoreHandler.cs    (ping, reload, status, menuitem,
+//                                           openscene, removescene, save,
+//                                           play, stop, pause, resume, step)
 //    domain "scene"   -> SceneHandler.cs   (open, save, play, stop, pause,
 //                                           resume, step, hierarchy)
 //    domain "asset"   -> AssetHandler.cs   (refresh, import, list)
