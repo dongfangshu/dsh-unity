@@ -8,7 +8,7 @@ JSON files under `UnityMain/UnityBridge/`.
 
 | Side | File | Role |
 |---|---|---|
-| Unity | `UnityMain/Packages/com.dsh.unitybridge/` (single UPM package: `Editor/UnityBridge.cs` + `Editor/Roslyn/*.dll`) | Polls `in/`, executes ops on the main thread, writes responses, heartbeat + log capture |
+| Unity | `UnityMain/Assets/Plugins/UnityBridge/` (UPM package: `Editor/UnityBridge.cs` + `Editor/Roslyn/*.dll` + `Runtime/`) | Polls `in/`, executes ops on the main thread, writes responses, heartbeat + log capture |
 | DSH | dynamic Cordis plugin (`unity_status`, `unity_exec`, `unity_cs`, `unity_log` tools) | Writes command files, polls `out/`, reports results |
 
 The bridge auto-starts when the editor loads. Toggle via

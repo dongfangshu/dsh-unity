@@ -3,7 +3,8 @@
 给其他 DSH 用户的分发物。接收方需要:
 
 1. DSH 会话(带 cordis 动态插件能力的 agent 预设)
-2. Unity 项目里已装好 `com.dsh.unitybridge` 包(见 `../com.dsh.unitybridge/README.md`)
+2. Unity 项目里已装好 `com.dsh.unitybridge` 包(见 `../unitybridge-repo/README.md`,
+   即 `Assets/Plugins/UnityBridge/`,可 git URL 或手动拷贝安装)
 
 ## 安装步骤
 

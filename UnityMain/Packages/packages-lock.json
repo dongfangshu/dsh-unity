@@ -1,11 +1,5 @@
 {
   "dependencies": {
-    "com.dsh.unitybridge": {
-      "version": "file:com.dsh.unitybridge",
-      "depth": 0,
-      "source": "embedded",
-      "dependencies": {}
-    },
     "com.unity.editorcoroutines": {
       "version": "1.0.0",
       "depth": 1,
