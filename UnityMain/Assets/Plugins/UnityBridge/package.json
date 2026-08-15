@@ -2,15 +2,8 @@
   "name": "com.dsh.unitybridge",
   "version": "1.0.0",
   "displayName": "DSH Unity Bridge",
-  "description": "File-queue bridge that lets a DSH agent drive the Unity editor: status, scenes, play mode, static-method eval, Roslyn C# scripting, in-place reload, and console log capture. Editor-only, zero network ports.",
+  "description": "File-queue bridge that lets an agent drive the Unity editor through four capability domains: read (unified read interface over assets, hierarchy, selection), execute (Roslyn C# as the single write path), log (console ring), and core (editor-session operations). Editor-only, zero network ports.",
   "unity": "2022.3",
   "keywords": ["dsh", "bridge", "automation", "roslyn"],
-  "author": { "name": "DSH" },
-  "samples": [
-    {
-      "displayName": "Simple Demo",
-      "description": "Menu items under Tools > Unity Bridge > Samples that drive the bridge directly: ping, print status, and create a cube via Roslyn scripting.",
-      "path": "Samples~/SimpleDemo"
-    }
-  ]
+  "author": { "name": "DSH" }
 }

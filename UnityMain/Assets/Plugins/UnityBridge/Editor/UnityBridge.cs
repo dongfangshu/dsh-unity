@@ -324,7 +324,7 @@ namespace DSH.UnityBridge
             return args[key].AsInt;
         }
 
-        /// <summary>Snapshot of the captured console log ring (used by core.log).</summary>
+        /// <summary>Snapshot of the captured console log ring (used by log.log).</summary>
         internal static Dictionary<string, object> LogSnapshot(int lines)
         {
             lock (LogRing)

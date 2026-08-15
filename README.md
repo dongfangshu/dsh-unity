@@ -1,16 +1,32 @@
-# DSH ↔ Unity Bridge (v2)
+# DSH ↔ Unity Bridge (v3)
 
-File-queue bridge that lets the DSH agent control the Unity editor from
+File-queue bridge that lets an agent control the Unity editor from
 `D:\DSH Unity\UnityMain`. No network ports — commands and responses travel as
 JSON files under `Library/UnityBridge/` inside the Unity project (machine-local,
 never version-controlled, auto-recreated on init).
+
+## Capability boundary
+
+The bridge exposes exactly four capability domains — **read / execute / log /
+core**. Nothing else is added on the op surface: new capabilities are expressed
+through `execute.cs` scripts or new `read` schemes, never new ops. See
+`CONTEXT.md` for the domain glossary.
+
+- **read** — the *only* read interface; addresses anything in the editor by
+  source scheme (`assets:` / `hierarchy:` / `select:`) and returns one unified
+  node envelope.
+- **execute** — the *only* write path; every create/update/delete is a Roslyn
+  C# script compiled and run in memory.
+- **log** — read the editor's captured console ring.
+- **core** — a closed set of editor-session operations (menu/toolbar-level,
+  object-type-independent).
 
 ## Components
 
 | Side | File | Role |
 |---|---|---|
-| Unity | `UnityMain/Assets/Plugins/UnityBridge/` (UPM package: `Editor/` asmdef `DSH.UnityBridge.Editor` + `CoreHandler/SceneHandler/AssetHandler/ScriptHandler.cs` + bundled Roslyn DLLs flat in `Editor/` + `Runtime/` + `Samples~`) | Polls `in/`, routes by domain, executes ops on the main thread, writes responses, heartbeat + log capture |
-| DSH | dynamic Cordis plugin (`unity_status`, `unity_exec`, `unity_cs`, `unity_log` tools) | Writes command files, polls `out/`, reports results |
+| Unity | `UnityMain/Assets/Plugins/UnityBridge/` (UPM package: `Editor/` asmdef `DSH.UnityBridge.Editor` + `ReadHandler/ExecuteHandler/LogHandler/CoreHandler.cs` + bundled Roslyn DLLs flat in `Editor/` + `Runtime/`) | Polls `in/`, routes by domain, executes ops on the main thread, writes responses, heartbeat + log capture |
+| Agent | `skills/unity-bridge/SKILL.md` (Agent Skill, Anthropic format) | Teaches the protocol so any agent with file access can drive Unity |
 
 The bridge auto-starts when the editor loads. Toggle via
 `Tools > Unity Bridge > Enable/Disable`.
@@ -27,73 +43,65 @@ safe to wipe (the bridge recreates it on init):
 - `status/heartbeat.json` — refreshed every 1s; agent uses it to detect "online"
 - `status/log.json` — last 300 captured console lines
 
-## Protocol (v2)
+## Protocol (v3)
 
-Ops are namespaced by **domain** (`core | scene | asset | script`); each domain
+Ops are namespaced by **domain** (`read | execute | log | core`); each domain
 is handled by its own `*Handler.cs` file in the package. Command envelope:
 
 ```json
-{ "id": "m1abc-xyzw", "domain": "scene", "op": "open", "args": { "path": "Assets/Scenes/SampleScene.unity" } }
+{ "id": "m1abc-xyzw", "domain": "read", "op": "hierarchy", "args": { "path": "Assets/Scenes/SampleScene.unity/Player" } }
 ```
 
 Response envelope:
 
 ```json
-{ "id": "m1abc-xyzw", "domain": "scene", "op": "open", "ok": true, "ts": 1699999999.123, "result": { "scene": "Assets/Scenes/SampleScene.unity", "loaded": true } }
+{ "id": "m1abc-xyzw", "domain": "read", "op": "hierarchy", "ok": true, "ts": 1699999999.123, "result": { "path": "...", "kind": "gameObject", ... } }
 ```
 
 Errors: `"ok": false, "error": "..."`.
 
+Unknown domains/ops are rejected with an error response.
+
 ## Ops
 
-| domain | op | args | effect |
-|---|---|---|---|
-| `core` | `ping` | — | round-trip check (`result.pong` = true) |
-| `core` | `status` | — | fresh snapshot: play mode, paused, scene, roots, selection, version |
-| `core` | `log` | `lines?` | tail of captured console log (max 300) |
-| `core` | `reload` | — | recompile all scripts + domain reload **in place** (no editor restart); heartbeat pauses then resumes |
-| `core` | `menu` | `item` | `EditorApplication.ExecuteMenuItem` (exact path) |
-| `scene` | `open` | `path`, `additive?` | open scene (single or additive) |
-| `scene` | `save` | — | save open scenes |
-| `scene` | `play` / `stop` | — | enter / exit play mode |
-| `scene` | `pause` / `resume` / `step` | — | play-mode stepping |
-| `scene` | `hierarchy` | `recursive?` | list scene root objects (`name`, `path`, `active`, `children`) |
-| `asset` | `refresh` | — | `AssetDatabase.Refresh()` |
-| `asset` | `import` | `path` | import one asset by project path, e.g. `"Assets/Foo.png"` |
-| `asset` | `list` | `path?`, `max?` | list asset paths under a folder (default `Assets`, capped) |
-| `script` | `eval` | `type`, `method`, `argsJson?` | invoke any static method; `argsJson` is a JSON array of scalars |
-| `script` | `cs` | `code`, `imports?`, `data?` | compile + run agent-written C# with Roslyn (in memory, no domain reload); code must define `Entry.Main(object args)`; `data` JSON → `args` |
+### read — the single read interface
 
-Unknown domains/ops are rejected with an error response. Adding a new domain
-= one handler class + one `case` in `UnityBridge.Execute`.
+Addresses are `scheme:address`; the engine resolves the address to an editor
+object, identifies what kind it is, and returns **one node envelope**:
 
-## Security note
+```
+{ "path", "kind", "name"?, "type"?, "instance"?, "activeSelf"?,
+  "components"?[], "children"?[], "properties"?{}, "content"? }
+```
 
-`script.eval` / `script.cs` can run arbitrary code inside the editor (e.g.
-`Debug.Break()`, `AssetDatabase.Refresh()`). The bridge binds to nothing but
-the local filesystem; keep `in/` trusted.
+`kind ∈ { scene, gameObject, component, text, asset }`. The envelope `path` is
+always a canonical address that can be read back verbatim.
 
-## Roslyn C# scripting (`script.cs` op / `unity_cs` tool)
+| op | address | returns |
+|---|---|---|
+| `read.assets` | `assets:<project-relative-path>` (`Assets/...` or `Packages/...`) | text assets → `kind:"text"` with `content` (raw file); serialized assets (`.prefab`/`.asset`/`.unity`) → `kind:"asset"` with `properties` (SerializedObject dump; a `.unity` SceneAsset is near-empty by design); binary files are rejected with a pointer to `execute.cs` |
+| `read.hierarchy` | `hierarchy:<scene-path>/<name>/<name>[@instance][/Type.Name]` | scene address → `kind:"scene"` with root objects as `children`; object address → `kind:"gameObject"` (ls-style: one level of `children`, `components` = type names); trailing type segment → `kind:"component"` with `properties` |
+| `read.select` | `select:` | current selection as node entries (`kind:"gameObject"` or `kind:"asset"`); empty selection → `[]` |
 
-The UPM package at `Assets/Plugins/UnityBridge/` bundles the bridge plus
-Microsoft.CodeAnalysis 3.8.0 (editor-only, DLLs flat in `Editor/`, referenced
-by the `DSH.UnityBridge.Editor` asmdef) with its exact runtime deps at the
-assembly versions Roslyn references (`System.Collections.Immutable` 5.0.0,
-`System.Reflection.Metadata` 5.0.0, `System.Memory` 4.0.1.1,
-`System.Threading.Tasks.Extensions` 4.2.0.1, `System.Runtime.CompilerServices.Unsafe`
-4.0.6.0, `System.Text.Encoding.CodePages` 4.1.1.0, `System.Buffers` 4.0.3.0,
-`System.Numerics.Vectors` 4.1.4.0). No domain reload: scripts compile to
-memory and run on the editor main thread.
+Hierarchy rules: the scene must be explicit (it defines the address space —
+use `core.openscene` first if needed). Reads are **one level at a time**
+(ls semantics); descend by reading again. Same-name siblings make a name chain
+ambiguous — `read` then fails with a candidate list, or disambiguate with an
+`@instance` segment (session-stable object id, printed in every node).
 
-- **Contract**: the code must define a static class named `Entry` with a
-  `public static object Main(object args)` method. `args` is the parsed
-  `data` JSON (cast to `Dictionary<string,object>` to read keys); the return
-  value becomes `result.value` (scalars pass through, other objects become
-  their `ToString()`).
-- **Implementation note**: uses `CSharpCompilation` → emit to memory →
-  `Assembly.Load(byte[])` → reflection. NOT the Roslyn Scripting API — its
-  assembly loader goes through `AssemblyLoadContext`, which Unity's Mono
-  stubs out with `NotImplementedException`.
+### execute — the single write path
+
+| op | args | effect |
+|---|---|---|
+| `execute.cs` | `code`, `imports?`, `data?` | compile + run agent-written C# with Roslyn (in memory, no domain reload) |
+
+Contract: the code must define a static class named `Entry` with a
+`public static object Main(object args)` method. `args` is the parsed `data`
+JSON (cast to `Dictionary<string,object>` to read keys). The return value
+becomes `result.value`, recursively converted to a JSON-serializable graph:
+scalars pass through, `IDictionary`/collections recurse, `UnityEngine.Object`
+becomes `{type, name, instance}`.
+
 - Language version: C# 9 (Roslyn 3.8). `download.js` in the package folder
   re-fetches the packages from nuget.org — bump the versions there to upgrade.
 - References: every assembly currently loaded in the editor (UnityEngine,
@@ -104,27 +112,44 @@ memory and run on the editor main thread.
   namespaces via `imports` (comma-separated).
 - Compile errors and runtime exceptions come back as `"ok": false` with
   diagnostics in `error`.
+- Implementation note: `CSharpCompilation` → emit to memory →
+  `Assembly.Load(byte[])` → reflection. NOT the Roslyn Scripting API — its
+  assembly loader goes through `AssemblyLoadContext`, which Unity's Mono
+  stubs out with `NotImplementedException`.
 
-## Agent-side tools
+### log — editor console
 
-- `unity_status` — is the bridge online? current state
-- `unity_exec` — send one op (any domain) and wait for the response
-- `unity_cs` — compile and run agent-written C# in the editor (Roslyn)
-- `unity_log` — tail of the captured Unity console log
+| op | args | effect |
+|---|---|---|
+| `log.log` | `lines?` (default 50, max 300) | tail of the captured console ring (each entry: elapsed time + LogType) |
 
-The plugin is **host-only (no web settings UI)**. It finds the Unity project
-automatically under the workspace root or `<workspace>/UnityMain` (probed on
-every call) — the user is expected to have the editor open, and no path
-configuration is needed.
+### core — editor-session operations (closed set)
 
-> **Agent-agnostic**: the bridge speaks a plain file-queue protocol, so *any*
-> agent with file access can drive Unity. `skills/unity-bridge/SKILL.md` is a
-> ready-made Agent Skill (Anthropic format). It is **loaded on demand**: copy
-> or mount it into an agent only when the user asks to control Unity — do not
-> auto-inject it into every agent's context. The skill never locates the
-> bridge by a fixed path and never launches Unity; it discovers the project
-> under the current workspace and reports offline to the user.
+| op | args | effect |
+|---|---|---|
+| `core.ping` | — | round-trip check (`result.pong` = true) |
+| `core.reload` | — | `AssetDatabase.Refresh()` (import) + `RequestScriptCompilation()` (recompile, domain reload) |
+| `core.status` | — | snapshot: `playing`, `paused`, `isCompiling`, `isUpdating`, `activeScene`, `openScenes[]`, `selection[]`, `projectPath`, `unityVersion`, `buildTarget` |
+| `core.menuitem` | `item` | `EditorApplication.ExecuteMenuItem` (exact path, no whitelist) |
+| `core.openscene` | `path`, `mode?` (`single`/`additive`) | open a scene; `.unity` suffix optional |
+| `core.removescene` | `path` \| `"all"` | close a scene (discarding unsaved changes); activation moves off the target first; refuses to close the last open scene |
+| `core.save` | `path?` | save all open scenes, or one scene by path |
+| `core.play` / `stop` | — | enter / exit play mode |
+| `core.pause` / `resume` / `step` | — | play-mode stepping |
 
-> The dynamic plugin itself is process-local: after a DSH restart it must be
-> re-created and re-approved, but the Unity side (and its config-free
-> auto-detection) survives.
+## Security note
+
+`execute.cs` can run arbitrary code inside the editor. The bridge binds to
+nothing but the local filesystem; keep `in/` trusted. Editor-session objects
+created in Edit mode (e.g. via `execute.cs`) are not persistent: they are lost
+on domain reload or scene close — runtime game objects belong in Play mode.
+
+## Agent-agnostic
+
+The bridge speaks a plain file-queue protocol, so *any* agent with file access
+can drive Unity. `skills/unity-bridge/SKILL.md` is a ready-made Agent Skill. It
+is **loaded on demand**: copy or mount it into an agent only when the user asks
+to control Unity — do not auto-inject it into every agent's context. The skill
+never locates the bridge by a fixed path and never launches Unity; it
+discovers the project under the current workspace and reports offline to the
+user.

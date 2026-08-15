@@ -1,6 +1,6 @@
 ---
 name: unity-bridge
-description: Drive a local Unity editor through the DSH Unity Bridge file-queue protocol v2 (status, play mode, scenes, hierarchy, assets, static-method eval, Roslyn C# scripting, reload, logs). Use when the user asks you to control, inspect, script, or test a Unity project on this machine, or when Unity is running with the bridge installed.
+description: Drive a local Unity editor through the DSH Unity Bridge file-queue protocol v3 (read: unified read interface over assets/hierarchy/selection; execute: Roslyn C# as the single write path; log: console ring; core: editor-session ops incl. play mode, scenes, reload, status, menu items). Use when the user asks you to control, inspect, script, or test a Unity project on this machine, or when Unity is running with the bridge installed.
 ---
 
 # Unity Bridge
@@ -39,19 +39,20 @@ installed, or the bridge is disabled (`Tools > Unity Bridge > Enable`).
 **Report that to the user and ask them to open the project** — do not attempt
 to start Unity.
 
-## 2. Protocol (v2)
+## 2. Protocol (v3)
 
-Ops are namespaced by **domain**. Write a command file `in/<id>.json`:
+The capability surface is exactly **four domains**: `read | execute | log |
+core`. Write a command file `in/<id>.json`:
 
 ```json
-{ "id": "my-1", "domain": "scene", "op": "play", "args": {} }
+{ "id": "my-1", "domain": "read", "op": "hierarchy", "args": { "path": "Assets/Scenes/SampleScene.unity/Player" } }
 ```
 
 The bridge picks it up within ~0.2 s, executes it on the editor main thread,
 moves it to `done/`, and writes `out/my-1.json`:
 
 ```json
-{ "id": "my-1", "domain": "scene", "op": "play", "ok": true, "ts": 1786773207.1, "result": { "playing": true } }
+{ "id": "my-1", "domain": "read", "op": "hierarchy", "ok": true, "ts": 1786773207.1, "result": { "path": "...", "kind": "gameObject" } }
 ```
 
 Errors: `"ok": false` with `"error": "..."` (compile errors carry line numbers).
@@ -59,53 +60,59 @@ Errors: `"ok": false` with `"error": "..."` (compile errors carry line numbers).
 Rules:
 - **Unique `id`** per command; poll `out/<id>.json` until it appears or ~30 s
   elapse. A response is only yours when `resp.id === id`.
-- `domain` is required: `core | scene | asset | script`.
+- `domain` is required: `read | execute | log | core`.
 - `args` is optional (`{}` when none).
-- The bridge never cleans up `in/` on its own — it moves processed commands
-  to `done/`; stale files in `in/` are pruned after 10 min.
+- Stale files in `in/` are pruned after 10 min; `out/` after 120 s.
 - Everything is plain UTF-8 JSON files — any language/runtime can drive it.
 
 Helper pattern (poll for the response):
 
 ```powershell
 $id = "my-1"
-Set-Content -Path "in\$id.json" -Value '{"id":"my-1","domain":"scene","op":"play","args":{}}' -Encoding UTF8 -NoNewline
+Set-Content -Path "in\$id.json" -Value '{"id":"my-1","domain":"read","op":"select","args":{}}' -Encoding UTF8 -NoNewline
 $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline) { if (Test-Path "out\$id.json") { Get-Content "out\$id.json" -Raw; break }; Start-Sleep -Milliseconds 300 }
 ```
 
 ## 3. Ops reference
 
-| domain | op | args | effect |
-|---|---|---|---|
-| `core` | `ping` | — | round-trip check (`result.pong` = true) |
-| `core` | `status` | — | snapshot: play mode, paused, open scene, root count, selection, Unity version |
-| `core` | `log` | `lines?` | tail of captured console log (max 300) |
-| `core` | `reload` | — | recompile all scripts + domain reload in place (use after editing C# files); heartbeat pauses then resumes |
-| `core` | `menu` | `item` | execute a menu item by exact path, e.g. `"File/Save Project"` |
-| `scene` | `open` | `path`, `additive?` | open scene, e.g. `"Assets/Scenes/SampleScene.unity"` |
-| `scene` | `save` | — | save open scenes |
-| `scene` | `play` / `stop` | — | enter / exit play mode |
-| `scene` | `pause` / `resume` / `step` | — | play-mode stepping |
-| `scene` | `hierarchy` | `recursive?` | list scene root objects (`name`, `path`, `active`, `children`) |
-| `asset` | `refresh` | — | `AssetDatabase.Refresh()` |
-| `asset` | `import` | `path` | import one asset by project path, e.g. `"Assets/Foo.png"` |
-| `asset` | `list` | `path?`, `max?` | list asset paths under a folder (default `Assets`, capped) |
-| `script` | `eval` | `type`, `method`, `argsJson?` | invoke any static method (public or private); `argsJson` is a JSON array of scalars, e.g. `{"type":"System.Math","method":"Sqrt","argsJson":"[9.0]"}` |
-| `script` | `cs` | `code`, `imports?`, `data?` | compile + run C# with Roslyn in memory (no domain reload) — see §4 |
+### read — the only read interface
 
-## 4. `script.cs` — run arbitrary C# in the editor (Roslyn)
+All reads return the **same node envelope**:
 
-Compiles with Roslyn 3.8 (C# 9) and executes in memory on the main thread.
-The code must define:
+```
+{ "path", "kind", "name"?, "type"?, "instance"?, "activeSelf"?,
+  "components"?[], "children"?[], "properties"?{}, "content"? }
+```
 
-```csharp
-using UnityEngine;
-public static class Entry {
-    public static object Main(object args) {
-        Debug.Log("hello");
-        return "done"; // becomes result.value
-    }
+`kind ∈ { scene, gameObject, component, text, asset }`. The envelope `path` is
+always a canonical address you can read back verbatim.
+
+| op | address | returns |
+|---|---|---|
+| `read.assets` | `assets:<path>` (project-relative, prefix required: `Assets/...` or `Packages/...`) | text assets (`.cs`, `.json`, ...) → `kind:"text"` with `content`; serialized assets (`.prefab`, `.asset`, `.unity`) → `kind:"asset"` with `properties` (SerializedObject dump); binary → error |
+| `read.hierarchy` | `hierarchy:<scene>/<Name>/<Name>[@instance][/Type.Name]` | scene address → `kind:"scene"`, root objects as `children`; object → `kind:"gameObject"` with `children` (one level) + `components` (type names); trailing type segment → `kind:"component"` with `properties` |
+| `read.select` | `select:` | current selection as entries; empty selection → `[]` |
+
+Hierarchy rules: the scene must be explicit (open it first with
+`core.openscene` if needed). Reads are **one level at a time** (ls semantics) —
+descend by reading again. Same-name siblings make a name chain ambiguous:
+the read fails listing candidates, or you disambiguate with an `@instance`
+segment (the session-stable id printed on every node).
+
+### execute — the only write path
+
+Every create/update/delete is a C# script. The code must define
+`public static class Entry { public static object Main(object args) { ... } }`:
+
+```json
+{
+  "id": "cube-1",
+  "domain": "execute",
+  "op": "cs",
+  "args": {
+    "code": "public static class Entry { public static object Main(object args) { var c = GameObject.CreatePrimitive(PrimitiveType.Cube); c.name = \"agent-cube\"; c.transform.position = new Vector3(1, 2, 3); return \"created \" + c.name; } }"
+  }
 }
 ```
 
@@ -118,33 +125,51 @@ public static class Entry {
   `UnityEditor`. Extra namespaces go in `imports` (comma-separated).
 - Every assembly loaded in the editor is referenced (UnityEngine, UnityEditor,
   your project scripts, ...).
+- The return value becomes `result.value`, recursively converted to JSON:
+  scalars pass through, dictionaries/lists recurse, `UnityEngine.Object`
+  becomes `{type, name, instance}`.
 - Compile errors and runtime exceptions come back in `"error"` with positions.
+- Edit-mode objects are not persistent — they are lost on domain reload or
+  scene close. Runtime game objects belong in Play mode.
 
-Example — create a cube:
+### log — editor console
 
-```json
-{
-  "id": "cube-1",
-  "domain": "script",
-  "op": "cs",
-  "args": {
-    "code": "using UnityEngine; public static class Entry { public static object Main(object args) { var c = GameObject.CreatePrimitive(PrimitiveType.Cube); c.name = \"agent-cube\"; c.transform.position = new Vector3(1, 2, 3); return \"created \" + c.name; } }"
-  }
-}
-```
+| op | args | effect |
+|---|---|---|
+| `log.log` | `lines?` (default 50) | tail of the captured console ring (elapsed time + LogType per entry) |
 
-## 5. Typical workflows
+### core — editor-session operations
+
+| op | args | effect |
+|---|---|---|
+| `core.ping` | — | round-trip check (`result.pong` = true) |
+| `core.reload` | — | import assets + recompile all scripts (domain reload). **Send this after editing any C# file**; wait for the heartbeat to resume (10–30 s) |
+| `core.status` | — | snapshot: `playing`, `paused`, `isCompiling`, `isUpdating`, `activeScene`, `openScenes[]`, `selection[]`, `projectPath`, `unityVersion`, `buildTarget` |
+| `core.menuitem` | `item` | execute a menu item by exact path, e.g. `"File/Save Project"` |
+| `core.openscene` | `path`, `mode?` (`single`/`additive`) | open a scene (`.unity` optional), e.g. `"Assets/Scenes/SampleScene.unity"` |
+| `core.removescene` | `path` \| `"all"` | close a scene (discards unsaved changes; refuses to close the last one) |
+| `core.save` | `path?` | save all open scenes, or one by path |
+| `core.play` / `stop` | — | enter / exit play mode |
+| `core.pause` / `resume` / `step` | — | play-mode stepping |
+
+## 4. Typical workflows
 
 - **Is Unity up?** → read `status/heartbeat.json` (or `core.status`).
-- **Run a quick play test** → `scene.play`, wait ~3 s, read `core.log`/`core.status`, then `scene.stop`.
-- **Inspect the scene** → `scene.hierarchy` (add `"recursive": true` for full tree).
-- **See what's in the project** → `asset.list` (e.g. `{"path":"Assets/Scenes"}`).
+- **Inspect the scene** → `core.status` for the active scene, then
+  `read.hierarchy` on it; descend one level per read.
+- **See what's in the project** → `read.assets` on the folder or file path.
+- **Read an object's data** → `read.hierarchy <path>/<ComponentType>` for
+  SerializedObject properties, or `read.assets` for serialized assets.
+- **Create / modify / delete anything** → `execute.cs` (add components, move
+  objects, spawn prefabs, `AssetDatabase.DeleteAsset`, ...).
+- **Run a play test** → `core.play`, wait ~3 s, inspect via `read` /
+  `log.log`, then `core.stop`.
 - **After editing any C# file in the project** → send `core.reload`, wait for
   the heartbeat to resume (10–30 s), then re-check `core.status`.
-- **Find something / change state** → `script.cs` with `GameObject.Find`,
-  `Object.FindObjectsOfType`, etc.
+- **If a read is ambiguous** → it lists candidates with `instance` ids; retry
+  with the `@<instance>` segment.
 
-## 6. Troubleshooting
+## 5. Troubleshooting
 
 - **`"ok": false` / timeout** — bridge offline: editor closed, package not
   installed, or `Tools > Unity Bridge` disabled. **Ask the user to open the
@@ -153,14 +178,14 @@ Example — create a cube:
   wait for the heartbeat file to refresh.
 - **Compile errors in `error`** — the C# failed to compile; fix per the
   diagnostics (positions are `(line, col)`).
-- **`Ambiguous match found` on `script.eval`** — the target method is
-  overloaded; pick a unique method name or use `script.cs` instead.
+- **`read.hierarchy` says the scene is not open** — open it with
+  `core.openscene` first (the scene defines the address space).
 - **Safe Mode** — if the editor enters Safe Mode (compile errors in project
   scripts), the bridge stops; ask the user to fix the scripts and exit
   Safe Mode.
 
-## 7. Security
+## 6. Security
 
-`script.eval` and `script.cs` execute arbitrary code inside the editor (full
-editor API access). Only use the bridge on projects you trust, and treat the
+`execute.cs` executes arbitrary code inside the editor (full editor API
+access). Only use the bridge on projects you trust, and treat the
 `Library/UnityBridge/` folder as trusted local tooling.
