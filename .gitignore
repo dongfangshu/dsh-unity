@@ -47,4 +47,6 @@ UnityMain/UnityBridge/
 .roslyn-download/
 
 # ===== external project (not part of this repo) =====
-plugins/
+# NOTE: anchored to the repo root (/plugins/) — an unanchored `plugins/`
+# would also match Assets/Plugins/... on case-insensitive filesystems.
+/plugins/
