@@ -1,18 +1,20 @@
 // ============================================================================
-//  ScriptHandler.cs — `script` domain: run agent-written code in the editor.
+//  ExecuteHandler.cs — `execute` domain: the bridge's single write path.
 //
-//  Ops: eval | cs
+//  Op: cs
 //  (routed here by UnityBridge.Execute on the command's `domain` field)
 //
-//  `eval` invokes any static method in the editor by name.
 //  `cs` compiles and executes agent-written C# with Roslyn (in memory, no
 //  domain reload): args.code = C# source, args.imports = extra namespaces,
 //  args.data = JSON object passed to Entry.Main(object args).
+//
+//  Capability boundary (see CONTEXT.md at the repo root): every
+//  create/update/delete in the editor is expressed through this op —
+//  there are no privileged write ops.
 // ============================================================================
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -24,76 +26,17 @@ using Assembly = System.Reflection.Assembly;
 
 namespace DSH.UnityBridge
 {
-    public static class ScriptHandler
+    public static class ExecuteHandler
     {
         public static object Handle(string op, JSONObject args)
         {
             switch (op)
             {
-                case "eval":
-                    return Eval(UnityBridge.GetString(args, "type"), UnityBridge.GetString(args, "method"), UnityBridge.GetString(args, "argsJson"));
                 case "cs":
-                    return EvalCs(UnityBridge.GetString(args, "code"), UnityBridge.GetString(args, "imports"), UnityBridge.GetString(args, "data"));
+                    return RunCs(UnityBridge.GetString(args, "code"), UnityBridge.GetString(args, "imports"), UnityBridge.GetString(args, "data"));
                 default:
-                    throw new Exception("unknown op '" + op + "' in domain script");
+                    throw new Exception("unknown op '" + op + "' in domain execute");
             }
-        }
-
-        // ------------------------------------------------------------------
-        // eval — invoke any static method (public or private) by name
-        // ------------------------------------------------------------------
-        static Dictionary<string, object> Eval(string typeName, string methodName, string argsJson)
-        {
-            if (string.IsNullOrEmpty(typeName)) throw new Exception("eval requires args.type");
-            if (string.IsNullOrEmpty(methodName)) throw new Exception("eval requires args.method");
-
-            Type type = ResolveType(typeName);
-            if (type == null) throw new Exception("type not found: " + typeName);
-
-            var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
-            MethodInfo method = type.GetMethod(methodName, flags);
-            if (method == null) throw new Exception("static method not found: " + typeName + "." + methodName);
-
-            object[] rawArgs = new object[0];
-            if (!string.IsNullOrEmpty(argsJson))
-            {
-                var parsed = JSON.Parse(argsJson);
-                if (parsed == null || !parsed.IsArray) throw new Exception("argsJson must be a JSON array");
-                var list = new List<object>();
-                foreach (JSONNode item in (JSONArray)parsed)
-                    list.Add(BridgeJson.ToPlainObject(item));
-                rawArgs = list.ToArray();
-            }
-
-            ParameterInfo[] ps = method.GetParameters();
-            if (rawArgs.Length > ps.Length) throw new Exception("too many arguments: " + methodName + " takes " + ps.Length);
-            var converted = new object[ps.Length];
-            for (int i = 0; i < ps.Length; i++)
-            {
-                ParameterInfo p = ps[i];
-                if (i < rawArgs.Length && rawArgs[i] != null)
-                    converted[i] = Convert.ChangeType(rawArgs[i], p.ParameterType, CultureInfo.InvariantCulture);
-                else if (p.HasDefaultValue)
-                    converted[i] = p.DefaultValue;
-                else
-                    converted[i] = p.ParameterType.IsValueType ? Activator.CreateInstance(p.ParameterType) : null;
-            }
-
-            object result;
-            try { result = method.Invoke(null, converted); }
-            catch (TargetInvocationException tie)
-            {
-                throw new Exception("eval threw: " + (tie.InnerException != null ? tie.InnerException.Message : tie.Message));
-            }
-            return new Dictionary<string, object> { ["value"] = Simplify(result) };
-        }
-
-        static object Simplify(object value)
-        {
-            if (value == null) return null;
-            Type t = value.GetType();
-            if (t.IsPrimitive || t.IsEnum || value is string || value is decimal || value is DateTime) return value;
-            return value.ToString();
         }
 
         // ------------------------------------------------------------------
@@ -102,7 +45,7 @@ namespace DSH.UnityBridge
         // Contract: code must define `public static class Entry { public static
         // object Main(object args) { ... } }`. args = parsed `data` JSON.
         // ------------------------------------------------------------------
-        static Dictionary<string, object> EvalCs(string code, string importsArg, string dataArg)
+        static Dictionary<string, object> RunCs(string code, string importsArg, string dataArg)
         {
             if (string.IsNullOrEmpty(code)) throw new Exception("cs requires args.code (C# source text)");
 
@@ -195,34 +138,43 @@ namespace DSH.UnityBridge
 
             return new Dictionary<string, object>
             {
-                ["value"] = Simplify(result)
+                ["value"] = ToPlain(result)
             };
         }
 
-        static Type ResolveType(string name)
+        // ------------------------------------------------------------------
+        // ToPlain — convert a script's return value into a JSON-serializable
+        // plain graph: scalars pass through, IDictionary/collections recurse,
+        // UnityEngine.Objects become {type,name,instance} (so agents can
+        // re-address them), anything else falls back to ToString().
+        // ------------------------------------------------------------------
+        static object ToPlain(object value, int depth = 0)
         {
-            Type t = Type.GetType(name);
-            if (t != null) return t;
-            foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+            if (value == null || depth > 20) return null;
+            if (value is string || value is bool || value is int || value is long
+                || value is double || value is float || value is decimal) return value;
+            if (value is UnityEngine.Object uobj)
+                return new Dictionary<string, object>
+                {
+                    ["type"] = uobj.GetType().Name,
+                    ["name"] = uobj.name,
+                    ["instance"] = uobj.GetInstanceID()
+                };
+            if (value is System.Collections.IDictionary dict)
             {
-                t = asm.GetType(name);
-                if (t != null) return t;
-                t = asm.GetType("UnityEngine." + name);
-                if (t != null) return t;
-                t = asm.GetType("UnityEditor." + name);
-                if (t != null) return t;
+                var o = new Dictionary<string, object>();
+                foreach (System.Collections.DictionaryEntry kv in dict)
+                    o[Convert.ToString(kv.Key)] = ToPlain(kv.Value, depth + 1);
+                return o;
             }
-            return null;
+            if (value is System.Collections.IEnumerable en)
+            {
+                var list = new List<object>();
+                foreach (object item in en) list.Add(ToPlain(item, depth + 1));
+                return list;
+            }
+            return value.ToString();
         }
-    }
-
-    // ========================================================================
-    //  Globals type exposed to Roslyn scripts (accessible by name in code,
-    //  e.g. `Args`, `Args["key"]`).
-    // ========================================================================
-    public class CsGlobals
-    {
-        public object Args;
     }
 }
 #endif

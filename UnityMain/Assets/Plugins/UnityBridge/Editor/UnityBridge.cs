@@ -15,11 +15,12 @@
 //
 //  Commands are namespaced by domain; each domain has its own handler file:
 //
-//    domain "core"   -> CoreHandler.cs    (ping, status, log, reload, menu)
-//    domain "scene"  -> SceneHandler.cs   (open, save, play, stop, pause,
-//                                          resume, step, hierarchy)
-//    domain "asset"  -> AssetHandler.cs   (refresh, import, list)
-//    domain "script" -> ScriptHandler.cs  (cs, eval — Roslyn, in-memory)
+//    domain "core"    -> CoreHandler.cs    (ping, status, log, reload, menu)
+//    domain "scene"   -> SceneHandler.cs   (open, save, play, stop, pause,
+//                                           resume, step, hierarchy)
+//    domain "asset"   -> AssetHandler.cs   (refresh, import, list)
+//    domain "execute" -> ExecuteHandler.cs (cs — Roslyn, in-memory; the
+//                                           single write path)
 //
 //  Command:   { "id": "...", "domain": "scene", "op": "play", "args": { } }
 //  Response:  { "id": "...", "domain": "scene", "op": "play", "ok": true,
@@ -29,7 +30,7 @@
 //  ring and file utilities. All domain logic lives in the *Handler.cs files.
 //
 //  The bridge only listens on the local filesystem and never opens a network
-//  port. `eval`/`cs` can invoke ANY code in the editor — treat the bridge
+//  port. `cs` can invoke ANY code in the editor — treat the bridge
 //  folder as trusted local tooling.
 // ============================================================================
 #if UNITY_EDITOR
@@ -213,7 +214,7 @@ namespace DSH.UnityBridge
                 case "core": return CoreHandler.Handle(op, args);
                 case "scene": return SceneHandler.Handle(op, args);
                 case "asset": return AssetHandler.Handle(op, args);
-                case "script": return ScriptHandler.Handle(op, args);
+                case "execute": return ExecuteHandler.Handle(op, args);
                 default: throw new Exception("unknown domain: " + domain);
             }
         }
