@@ -112,6 +112,11 @@ memory and run on the editor main thread.
 - `unity_cs` — compile and run agent-written C# in the editor (Roslyn)
 - `unity_log` — tail of the captured Unity console log
 
+The plugin is **host-only (no web settings UI)**. It finds the Unity project
+automatically under the workspace root or `<workspace>/UnityMain` (probed on
+every call) — the user is expected to have the editor open, and no path
+configuration is needed.
+
 > **Agent-agnostic**: the bridge speaks a plain file-queue protocol, so *any*
 > agent with file access can drive Unity. `skills/unity-bridge/SKILL.md` is a
 > ready-made Agent Skill (Anthropic format). It is **loaded on demand**: copy
@@ -120,18 +125,6 @@ memory and run on the editor main thread.
 > bridge by a fixed path and never launches Unity; it discovers the project
 > under the current workspace and reports offline to the user.
 
-## Web settings (Unity path)
-
-The DSH plugin registers a **Unity Bridge** page in the web app's Settings
-(设置 → Unity Bridge). It persists one machine-local value to
-`.unity-bridge-config.json` in the workspace root (gitignored):
-
-- `unityProjectPath` — the Unity project folder; the bridge queue is derived
-  as `<project>/Library/UnityBridge`. Leave empty to auto-detect under the
-  workspace (`./Assets` or `./UnityMain/Assets`).
-
-The agent-side tools read this value on every call, so a save in Settings
-takes effect immediately — no plugin restart needed.
-
 > The dynamic plugin itself is process-local: after a DSH restart it must be
-> re-created and re-approved, but the config file (and Unity side) survive.
+> re-created and re-approved, but the Unity side (and its config-free
+> auto-detection) survives.
