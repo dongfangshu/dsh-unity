@@ -98,3 +98,20 @@ to memory and run on the editor main thread.
 - `unity_exec` — send one op and wait for the response
 - `unity_cs` — compile and run agent-written C# in the editor (Roslyn)
 - `unity_log` — tail of the captured Unity console log
+
+## Web settings (Unity paths)
+
+The DSH plugin registers a **Unity Bridge** page in the web app's Settings
+(设置 → Unity Bridge). It persists two machine-local values to
+`.unity-bridge-config.json` in the workspace root (gitignored):
+
+- `unityProjectPath` — the Unity project folder; the bridge root is derived
+  as `<project>/UnityBridge` (default `D:/DSH Unity/UnityMain`)
+- `unityExePath` — path to Unity.exe (default
+  `C:/Unity/2022.3.4f1/Editor/Unity.exe`)
+
+The agent-side tools read these values on every call, so a save in Settings
+takes effect immediately — no plugin restart needed.
+
+> The dynamic plugin itself is process-local: after a DSH restart it must be
+> re-created and re-approved, but the config file (and Unity side) survive.
