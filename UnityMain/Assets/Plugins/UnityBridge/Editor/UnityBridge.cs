@@ -15,17 +15,14 @@
 //
 //  Commands are namespaced by domain; each domain has its own handler file:
 //
+//    domain "read"    -> ReadHandler.cs    (assets / hierarchy / select —
+//                                           the single read interface)
+//    domain "execute" -> ExecuteHandler.cs (cs — Roslyn, in-memory; the
+//                                           single write path)
+//    domain "log"     -> LogHandler.cs     (log — console ring tail)
 //    domain "core"    -> CoreHandler.cs    (ping, reload, status, menuitem,
 //                                           openscene, removescene, save,
 //                                           play, stop, pause, resume, step)
-//    domain "scene"   -> SceneHandler.cs   (open, save, play, stop, pause,
-//                                           resume, step, hierarchy)
-//    domain "asset"   -> AssetHandler.cs   (refresh, import, list)
-//    domain "execute" -> ExecuteHandler.cs (cs — Roslyn, in-memory; the
-//                                           single write path)
-//    domain "read"    -> ReadHandler.cs    (assets / hierarchy / select —
-//                                           the single read interface)
-//    domain "log"     -> LogHandler.cs    (log — console ring tail)
 //
 //  Command:   { "id": "...", "domain": "scene", "op": "play", "args": { } }
 //  Response:  { "id": "...", "domain": "scene", "op": "play", "ok": true,
@@ -216,12 +213,10 @@ namespace DSH.UnityBridge
         {
             switch (domain)
             {
-                case "core": return CoreHandler.Handle(op, args);
-                case "scene": return SceneHandler.Handle(op, args);
-                case "asset": return AssetHandler.Handle(op, args);
-                case "execute": return ExecuteHandler.Handle(op, args);
                 case "read": return ReadHandler.Handle(op, args);
+                case "execute": return ExecuteHandler.Handle(op, args);
                 case "log": return LogHandler.Handle(op, args);
+                case "core": return CoreHandler.Handle(op, args);
                 default: throw new Exception("unknown domain: " + domain);
             }
         }
