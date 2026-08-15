@@ -1,7 +1,7 @@
 {
   "dependencies": {
-    "com.dsh.roslyn": {
-      "version": "file:com.dsh.roslyn",
+    "com.dsh.unitybridge": {
+      "version": "file:com.dsh.unitybridge",
       "depth": 0,
       "source": "embedded",
       "dependencies": {}

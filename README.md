@@ -8,8 +8,8 @@ JSON files under `UnityMain/UnityBridge/`.
 
 | Side | File | Role |
 |---|---|---|
-| Unity | `UnityMain/Assets/Editor/UnityBridge.cs` | Polls `in/`, executes ops on the main thread, writes responses, heartbeat + log capture |
-| DSH | dynamic Cordis plugin (`unity_status`, `unity_exec`, `unity_log` tools) | Writes command files, polls `out/`, reports results |
+| Unity | `UnityMain/Packages/com.dsh.unitybridge/` (single UPM package: `Editor/UnityBridge.cs` + `Editor/Roslyn/*.dll`) | Polls `in/`, executes ops on the main thread, writes responses, heartbeat + log capture |
+| DSH | dynamic Cordis plugin (`unity_status`, `unity_exec`, `unity_cs`, `unity_log` tools) | Writes command files, polls `out/`, reports results |
 
 The bridge auto-starts when the editor loads. Toggle via
 `Tools > Unity Bridge > Enable/Disable`.
@@ -63,14 +63,14 @@ the local filesystem; keep `in/` trusted.
 
 ## Roslyn C# scripting (`cs` op / `unity_cs` tool)
 
-The embedded UPM package `UnityMain/Packages/com.dsh.roslyn` bundles
-Microsoft.CodeAnalysis 3.8.0 (editor-only, `Editor/` folder) plus its exact
-runtime deps at the assembly versions Roslyn references (`System.Collections.
-Immutable` 5.0.0, `System.Reflection.Metadata` 5.0.0, `System.Memory` 4.0.1.1,
-`System.Threading.Tasks.Extensions` 4.2.0.1, `System.Runtime.CompilerServices.
-Unsafe` 4.0.6.0, `System.Text.Encoding.CodePages` 4.1.1.0, `System.Buffers`
-4.0.3.0, `System.Numerics.Vectors` 4.1.4.0). No domain reload: scripts compile
-to memory and run on the editor main thread.
+The embedded UPM package `UnityMain/Packages/com.dsh.unitybridge` bundles the
+bridge plus Microsoft.CodeAnalysis 3.8.0 (editor-only, `Editor/Roslyn/` folder)
+with its exact runtime deps at the assembly versions Roslyn references
+(`System.Collections.Immutable` 5.0.0, `System.Reflection.Metadata` 5.0.0,
+`System.Memory` 4.0.1.1, `System.Threading.Tasks.Extensions` 4.2.0.1,
+`System.Runtime.CompilerServices.Unsafe` 4.0.6.0, `System.Text.Encoding.CodePages`
+4.1.1.0, `System.Buffers` 4.0.3.0, `System.Numerics.Vectors` 4.1.4.0). No
+domain reload: scripts compile to memory and run on the editor main thread.
 
 - **Contract**: the code must define a static class named `Entry` with a
   `public static object Main(object args)` method. `args` is the parsed

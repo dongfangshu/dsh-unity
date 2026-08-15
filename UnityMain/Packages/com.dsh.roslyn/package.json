@@ -1,7 +1,0 @@
-{
-  "name": "com.dsh.roslyn",
-  "version": "1.0.0",
-  "displayName": "DSH Roslyn",
-  "description": "Roslyn (Microsoft.CodeAnalysis 3.8.0) compiler-as-a-service, editor-only. Used by the Unity bridge to compile and execute agent-written C# in memory.",
-  "unity": "2022.3"
-}

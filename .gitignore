@@ -45,3 +45,6 @@ UnityMain/UnityBridge/
 
 # ===== Roslyn re-download temp (if any) =====
 .roslyn-download/
+
+# ===== external project (not part of this repo) =====
+plugins/
