@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -28,6 +29,16 @@ namespace DSH.UnityBridge
 {
     public static class ExecuteHandler
     {
+        static List<MetadataReference> _refs;
+        static int _refCount = -1;
+        static readonly Dictionary<string, MethodInfo> _compiled = new Dictionary<string, MethodInfo>();
+
+        static ExecuteHandler()
+        {
+            try { Encoding.RegisterProvider(CodePagesEncodingProvider.Instance); }
+            catch { }
+        }
+
         public static object Handle(string op, JSONObject args)
         {
             switch (op)
@@ -59,35 +70,55 @@ namespace DSH.UnityBridge
                 foreach (string ns in importsArg.Split(','))
                     if (!string.IsNullOrWhiteSpace(ns)) imports.Add(ns.Trim());
 
-            // Reference every assembly currently loaded in the editor.
-            var refs = new List<MetadataReference>();
-            foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                if (a.IsDynamic || string.IsNullOrEmpty(a.Location)) continue;
-                try { refs.Add(MetadataReference.CreateFromFile(a.Location)); }
-                catch { }
-            }
-
-            // Prepend extra `using` directives the agent requested.
             var sb = new StringBuilder();
             foreach (string ns in imports)
                 sb.Append("using ").Append(ns).Append(";\n");
             sb.Append(code);
             string fullCode = sb.ToString();
 
-            // Roslyn needs the code-page provider for some encodings; safe to register once.
-            try { Encoding.RegisterProvider(CodePagesEncodingProvider.Instance); }
-            catch { }
+            string key = Sha(fullCode);
+            MethodInfo main;
+            if (!_compiled.TryGetValue(key, out main))
+            {
+                main = Compile(fullCode);
+                _compiled[key] = main;
+            }
 
-            // Compile with CSharpCompilation (NOT the Scripting API: its assembly
-            // loader uses AssemblyLoadContext, which Unity's Mono stubs out with
-            // NotImplementedException). Emit to a memory stream, then load with
-            // Assembly.Load(byte[]) and invoke the entry point via reflection.
+            object args = null;
+            if (!string.IsNullOrEmpty(dataArg))
+            {
+                try { args = BridgeJson.ToPlainObject(JSON.Parse(dataArg)); }
+                catch { args = null; }
+            }
+
+            object result;
+            try
+            {
+                ParameterInfo[] ps = main.GetParameters();
+                if (ps.Length == 0) result = main.Invoke(null, null);
+                else if (ps.Length == 1 && ps[0].ParameterType == typeof(object)) result = main.Invoke(null, new[] { args });
+                else throw new Exception("Entry.Main must take no parameters or one 'object' parameter");
+            }
+            catch (TargetInvocationException tie)
+            {
+                throw new Exception("cs script error: " + (tie.InnerException != null ? tie.InnerException.Message : tie.Message));
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["value"] = ToPlain(result)
+            };
+        }
+
+        static MethodInfo Compile(string fullCode)
+        {
+            // CSharpCompilation, not the Scripting API: AssemblyLoadContext is
+            // stubbed out on Unity's Mono (NotImplementedException).
             var tree = CSharpSyntaxTree.ParseText(fullCode, new CSharpParseOptions(LanguageVersion.Latest));
             var compilation = CSharpCompilation.Create(
                 "AgentScript",
                 new[] { tree },
-                refs,
+                Refs(),
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
             byte[] peBytes;
@@ -115,31 +146,36 @@ namespace DSH.UnityBridge
             MethodInfo main = entry.GetMethod("Main", BindingFlags.Public | BindingFlags.Static);
             if (main == null)
                 throw new Exception("cs code must define a public static method 'Main' on Entry");
+            return main;
+        }
 
-            object args = null;
-            if (!string.IsNullOrEmpty(dataArg))
+        static List<MetadataReference> Refs()
+        {
+            Assembly[] asms = AppDomain.CurrentDomain.GetAssemblies();
+            int n = 0;
+            foreach (Assembly a in asms)
+                if (!a.IsDynamic && !string.IsNullOrEmpty(a.Location)) n++;
+            if (_refs != null && n == _refCount) return _refs;
+            _refCount = n;
+            var refs = new List<MetadataReference>(n);
+            foreach (Assembly a in asms)
             {
-                try { args = BridgeJson.ToPlainObject(JSON.Parse(dataArg)); }
-                catch { args = null; }
+                if (a.IsDynamic || string.IsNullOrEmpty(a.Location)) continue;
+                try { refs.Add(MetadataReference.CreateFromFile(a.Location)); }
+                catch { }
             }
+            return _refs = refs;
+        }
 
-            object result;
-            try
+        static string Sha(string text)
+        {
+            using (var sha = SHA256.Create())
             {
-                ParameterInfo[] ps = main.GetParameters();
-                if (ps.Length == 0) result = main.Invoke(null, null);
-                else if (ps.Length == 1 && ps[0].ParameterType == typeof(object)) result = main.Invoke(null, new[] { args });
-                else throw new Exception("Entry.Main must take no parameters or one 'object' parameter");
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(text));
+                var sb = new StringBuilder(hash.Length * 2);
+                foreach (byte b in hash) sb.Append(b.ToString("x2"));
+                return sb.ToString();
             }
-            catch (TargetInvocationException tie)
-            {
-                throw new Exception("cs script error: " + (tie.InnerException != null ? tie.InnerException.Message : tie.Message));
-            }
-
-            return new Dictionary<string, object>
-            {
-                ["value"] = ToPlain(result)
-            };
         }
 
         // ------------------------------------------------------------------
