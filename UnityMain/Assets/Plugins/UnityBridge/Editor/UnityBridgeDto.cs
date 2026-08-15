@@ -13,7 +13,7 @@
 //               { "id": "...", "domain": "scene", "op": "play", "ok": false,
 //                 "ts": ..., "error": "..." }
 //
-//  Domains: core | scene | asset | execute. Each domain is handled by its own
+//  Domains: core | scene | asset | execute | read. Each domain is handled by its own
 //  *Handler.cs file; the core routes on the `domain` field. Unknown
 //  domains/ops are rejected with an error response.
 // ============================================================================
@@ -46,7 +46,7 @@ namespace DSH.UnityBridge
                 op = obj["op"].Value,
                 args = (obj["args"] as JSONObject) ?? new JSONObject(),
             };
-            if (string.IsNullOrEmpty(cmd.domain)) throw new Exception("missing 'domain' (core|scene|asset|execute)");
+            if (string.IsNullOrEmpty(cmd.domain)) throw new Exception("missing 'domain' (core|scene|asset|execute|read)");
             if (string.IsNullOrEmpty(cmd.op)) throw new Exception("missing 'op'");
             return cmd;
         }

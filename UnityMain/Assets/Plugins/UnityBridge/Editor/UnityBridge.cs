@@ -21,6 +21,8 @@
 //    domain "asset"   -> AssetHandler.cs   (refresh, import, list)
 //    domain "execute" -> ExecuteHandler.cs (cs — Roslyn, in-memory; the
 //                                           single write path)
+//    domain "read"    -> ReadHandler.cs    (assets / hierarchy / select —
+//                                           the single read interface)
 //
 //  Command:   { "id": "...", "domain": "scene", "op": "play", "args": { } }
 //  Response:  { "id": "...", "domain": "scene", "op": "play", "ok": true,
@@ -215,6 +217,7 @@ namespace DSH.UnityBridge
                 case "scene": return SceneHandler.Handle(op, args);
                 case "asset": return AssetHandler.Handle(op, args);
                 case "execute": return ExecuteHandler.Handle(op, args);
+                case "read": return ReadHandler.Handle(op, args);
                 default: throw new Exception("unknown domain: " + domain);
             }
         }
