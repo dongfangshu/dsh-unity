@@ -99,6 +99,12 @@ domain reload: scripts compile to memory and run on the editor main thread.
 - `unity_cs` — compile and run agent-written C# in the editor (Roslyn)
 - `unity_log` — tail of the captured Unity console log
 
+> **Agent-agnostic**: the bridge speaks a plain file-queue protocol, so *any*
+> agent with file access can drive Unity. `skills/unity-bridge/SKILL.md` is a
+> ready-made Agent Skill (Anthropic format) — copy the folder into other
+> agents' skill directories (Claude Code `~/.claude/skills/`, Cursor
+> `.cursor/skills/`, Copilot `.github/skills/`, ...) or paste it as context.
+
 ## Web settings (Unity paths)
 
 The DSH plugin registers a **Unity Bridge** page in the web app's Settings
