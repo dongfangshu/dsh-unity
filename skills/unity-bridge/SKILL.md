@@ -26,7 +26,7 @@ the project itself.
 
 ```
 <project>/Library/UnityBridge/
-  in/       command files  <id>.json   (you write here)
+  in/       command files  <id>.json | <id>.cs  (you write here)
   running/  at most one claimed command (bridge moves here before execute)
   out/      response files <id>.json   (bridge writes here; pruned after 120s)
   done/     processed command files    (pruned after 600s)
@@ -49,6 +49,13 @@ core`. Write a command file `in/<id>.json`:
 { "id": "my-1", "domain": "read", "op": "hierarchy", "args": { "path": "Assets/Scenes/SampleScene.unity/Player" } }
 ```
 
+Or drop C# directly as `in/<id>.cs` (see execute below). Response is always
+`out/<id>.json`.
+
+**Write atomically:** write `in/<id>.<ext>.tmp`, then rename to `in/<id>.<ext>`.
+Do not write the final path in place — a half-written file is claimed and
+fails. The bridge also ignores files younger than 150 ms as a settle window.
+
 The bridge picks it up within ~0.2 s, **claims** it (`in/` → `running/`; at
 most one in flight), executes it on the editor main thread, writes
 `out/my-1.json`, then moves it to `done/`:
@@ -60,19 +67,22 @@ most one in flight), executes it on the editor main thread, writes
 Errors: `"ok": false` with `"error": "..."` (compile errors carry line numbers).
 
 Rules:
-- **Unique `id`** per command; poll `out/<id>.json` until it appears or ~30 s
-  elapse. A response is only yours when `resp.id === id`.
-- `domain` is required: `read | execute | log | core`.
+- **Unique `id`** per command (the filename without extension); poll
+  `out/<id>.json` until it appears. A response is only yours when
+  `resp.id === id`.
+- `domain` is required on JSON commands: `read | execute | log | core`.
 - `args` is optional (`{}` when none).
 - Stale files in `in/` are pruned after 10 min; `out/` after 120 s.
   `running/` is not pruned — leftovers are reaped on the next editor load.
-- Everything is plain UTF-8 JSON files — any language/runtime can drive it.
+- JSON commands and dropped `.cs` files are both UTF-8.
 
-Helper pattern (poll for the response):
+Helper pattern (atomic write + poll for the response):
 
 ```powershell
 $id = "my-1"
-Set-Content -Path "in\$id.json" -Value '{"id":"my-1","domain":"read","op":"select","args":{}}' -Encoding UTF8 -NoNewline
+$tmp = "in\$id.json.tmp"
+Set-Content -Path $tmp -Value '{"id":"my-1","domain":"read","op":"select","args":{}}' -Encoding UTF8 -NoNewline
+Move-Item -LiteralPath $tmp -Destination "in\$id.json"
 $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline) { if (Test-Path "out\$id.json") { Get-Content "out\$id.json" -Raw; break }; Start-Sleep -Milliseconds 300 }
 ```
@@ -106,7 +116,11 @@ segment (the session-stable id printed on every node).
 ### execute — the only write path
 
 Every create/update/delete is a C# script. The code must define
-`public static class Entry { public static object Main(object args) { ... } }`:
+`public static class Entry { public static object Main(object args) { ... } }`.
+
+**Prefer dropping the source as `in/<id>.cs`** (filename = id, body = code).
+The bridge treats it as `execute.cs`; poll `out/<id>.json`. This avoids stuffing
+C# into a JSON string. The JSON envelope still works unchanged:
 
 ```json
 {
@@ -115,6 +129,19 @@ Every create/update/delete is a C# script. The code must define
   "op": "cs",
   "args": {
     "code": "public static class Entry { public static object Main(object args) { var c = GameObject.CreatePrimitive(PrimitiveType.Cube); c.name = \"agent-cube\"; c.transform.position = new Vector3(1, 2, 3); return \"created \" + c.name; } }"
+  }
+}
+```
+
+Dropped `.cs` file (write `in/cube-1.cs.tmp` then rename to `in/cube-1.cs`):
+
+```csharp
+public static class Entry {
+  public static object Main(object args) {
+    var c = GameObject.CreatePrimitive(PrimitiveType.Cube);
+    c.name = "agent-cube";
+    c.transform.position = new Vector3(1, 2, 3);
+    return "created " + c.name;
   }
 }
 ```
@@ -187,6 +214,8 @@ Every create/update/delete is a C# script. The code must define
   It will **not** be retried; send it again if you still need the effect.
 - **Compile errors in `error`** — the C# failed to compile; fix per the
   diagnostics (positions are `(line, col)`).
+- **JSON parse error on a command you just wrote** — half-written file was
+  claimed. Write `*.tmp` then rename; do not write the final path in place.
 - **`read.hierarchy` says the scene is not open** — open it with
   `core.openscene` first (the scene defines the address space).
 - **Safe Mode** — if the editor enters Safe Mode (compile errors in project

@@ -4,7 +4,7 @@
 //  Protocol v2 (see README at the project root for the full doc):
 //
 //    <project>/Library/UnityBridge/
-//      in/      command files  <id>.json   (written by the agent side)
+//      in/      command files  <id>.json | <id>.cs  (written by the agent)
 //      running/ at most one claimed command (claimed before execute)
 //      out/     response files <id>.json   (written here, pruned after 120s)
 //      done/    processed command files    (pruned after 600s)
@@ -19,7 +19,9 @@
 //    domain "read"    -> ReadHandler.cs    (assets / hierarchy / select —
 //                                           the single read interface)
 //    domain "execute" -> ExecuteHandler.cs (cs — Roslyn, in-memory; the
-//                                           single write path)
+//                                           single write path). A dropped
+//                                           in/<id>.cs file is the same op
+//                                           with args.code = file body.
 //    domain "log"     -> LogHandler.cs     (log — console ring tail)
 //    domain "core"    -> CoreHandler.cs    (ping, reload, status, menuitem,
 //                                           openscene, removescene, save,
@@ -60,6 +62,7 @@ namespace DSH.UnityBridge
         public const string Version = "1.0.0";
         public const float PollInterval = 0.15f;        // command folder poll
         public const float HeartbeatInterval = 1.0f;    // status file refresh
+        public const int CommandSettleMs = 150;         // ignore brand-new in/ files
         public const int LogRingSize = 300;
 
         static bool _enabled = true;
@@ -141,13 +144,16 @@ namespace DSH.UnityBridge
         {
             // At most one in-flight command. Leftovers here mean the previous
             // Execute never returned (typically a domain reload).
-            if (Directory.GetFiles(_runningDir, "*.json").Length > 0) return;
+            if (ListCommandFiles(_runningDir).Length > 0) return;
 
-            string[] files = Directory.GetFiles(_inDir, "*.json");
+            string[] files = ListCommandFiles(_inDir)
+                .Where(f => (DateTime.UtcNow - File.GetCreationTimeUtc(f)).TotalMilliseconds >= CommandSettleMs)
+                .OrderBy(File.GetLastWriteTime)
+                .ToArray();
             if (files.Length == 0) return;
 
             // One command per tick so the heartbeat can run between them.
-            string file = files.OrderBy(File.GetLastWriteTime).First();
+            string file = files[0];
             string name = Path.GetFileName(file);
             string runningPath = Path.Combine(_runningDir, name);
 
@@ -161,7 +167,9 @@ namespace DSH.UnityBridge
             try
             {
                 text = File.ReadAllText(runningPath);
-                var cmd = BridgeCommand.Parse(text);
+                var cmd = IsCsCommand(name)
+                    ? BridgeCommand.FromCsFile(id, text)
+                    : BridgeCommand.Parse(text);
                 if (!string.IsNullOrEmpty(cmd.id)) id = cmd.id;
                 domain = cmd.domain;
                 op = cmd.op;
@@ -196,7 +204,7 @@ namespace DSH.UnityBridge
         static void ReapInterrupted()
         {
             string[] leftovers;
-            try { leftovers = Directory.GetFiles(_runningDir, "*.json"); }
+            try { leftovers = ListCommandFiles(_runningDir); }
             catch { return; }
 
             foreach (string file in leftovers)
@@ -207,11 +215,19 @@ namespace DSH.UnityBridge
                 string op = "?";
                 try
                 {
-                    string text = File.ReadAllText(file);
-                    var cmd = BridgeCommand.Parse(text);
-                    if (!string.IsNullOrEmpty(cmd.id)) id = cmd.id;
-                    if (!string.IsNullOrEmpty(cmd.domain)) domain = cmd.domain;
-                    if (!string.IsNullOrEmpty(cmd.op)) op = cmd.op;
+                    if (IsCsCommand(name))
+                    {
+                        domain = "execute";
+                        op = "cs";
+                    }
+                    else
+                    {
+                        string text = File.ReadAllText(file);
+                        var cmd = BridgeCommand.Parse(text);
+                        if (!string.IsNullOrEmpty(cmd.id)) id = cmd.id;
+                        if (!string.IsNullOrEmpty(cmd.domain)) domain = cmd.domain;
+                        if (!string.IsNullOrEmpty(cmd.op)) op = cmd.op;
+                    }
                 }
                 catch { }
 
@@ -340,12 +356,18 @@ namespace DSH.UnityBridge
             try
             {
                 DateTime cutoff = DateTime.UtcNow - age;
-                foreach (string f in Directory.GetFiles(dir, "*.json"))
+                foreach (string f in ListCommandFiles(dir))
                     if (File.GetLastWriteTimeUtc(f) < cutoff)
                         try { File.Delete(f); } catch { }
             }
             catch { }
         }
+
+        static string[] ListCommandFiles(string dir) =>
+            Directory.GetFiles(dir, "*.json").Concat(Directory.GetFiles(dir, "*.cs")).ToArray();
+
+        static bool IsCsCommand(string name) =>
+            string.Equals(Path.GetExtension(name), ".cs", StringComparison.OrdinalIgnoreCase);
 
         static void AtomicWrite(string finalPath, string content)
         {

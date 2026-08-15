@@ -50,6 +50,23 @@ namespace DSH.UnityBridge
             if (string.IsNullOrEmpty(cmd.op)) throw new Exception("missing 'op'");
             return cmd;
         }
+
+        /// <summary>
+        /// A dropped <c>in/&lt;id&gt;.cs</c> file: same as execute.cs, with
+        /// <c>args.code</c> = the file body. JSON envelope unchanged.
+        /// </summary>
+        public static BridgeCommand FromCsFile(string id, string code)
+        {
+            var args = new JSONObject();
+            args["code"] = code ?? "";
+            return new BridgeCommand
+            {
+                id = id,
+                domain = "execute",
+                op = "cs",
+                args = args,
+            };
+        }
     }
 
     /// <summary>Response envelope written to &lt;project&gt;/Library/UnityBridge/out/.</summary>
