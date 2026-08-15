@@ -1,11 +1,11 @@
 // UnityBridgeSample.cs — Simple demo for the DSH Unity Bridge package.
 //
 // Drives the bridge directly through its file-queue protocol, no agent or
-// DSH involved: writes a JSON command to <project>/UnityBridge/in/, polls
-// out/ for the response, and logs it.
+// DSH involved: writes a JSON command to <project>/Library/UnityBridge/in/,
+// polls out/ for the response, and logs it.
 //
 // Requires: the bridge active (editor open with the package installed —
-// <project>/UnityBridge/status/heartbeat.json exists and is fresh).
+// <project>/Library/UnityBridge/status/heartbeat.json exists and is fresh).
 #if UNITY_EDITOR
 using System;
 using System.IO;
@@ -17,16 +17,16 @@ public static class UnityBridgeSample
     const string BridgeDir = "UnityBridge";
     const float TimeoutSeconds = 30f;
 
-    static string Root => Path.GetFullPath(Path.Combine(Application.dataPath, "..", BridgeDir));
+    static string Root => Path.GetFullPath(Path.Combine(Application.dataPath, "..", "Library", BridgeDir));
     static string InDir => Path.Combine(Root, "in");
     static string OutDir => Path.Combine(Root, "out");
     static string HeartbeatFile => Path.Combine(Root, "status", "heartbeat.json");
 
     [MenuItem("Tools/Unity Bridge/Samples/Ping")]
-    public static void SamplePing() => Send("ping", "{}", null);
+    public static void SamplePing() => Send("core", "ping", "{}", null);
 
     [MenuItem("Tools/Unity Bridge/Samples/Print Status")]
-    public static void SampleStatus() => Send("status", "{}", null);
+    public static void SampleStatus() => Send("core", "status", "{}", null);
 
     [MenuItem("Tools/Unity Bridge/Samples/Create Cube (Roslyn cs)")]
     public static void SampleCube()
@@ -35,11 +35,11 @@ public static class UnityBridgeSample
             "using UnityEngine; public static class Entry { public static object Main(object args) {" +
             " var c = GameObject.CreatePrimitive(PrimitiveType.Cube); c.name = \"sample-cube\";" +
             " return \"created \" + c.name; } }";
-        Send("cs", null, script);
+        Send("script", "cs", null, script);
     }
 
     /// <summary>Write one command and log the response when it arrives.</summary>
-    static void Send(string op, string plainArgsJson, string csCode)
+    static void Send(string domain, string op, string plainArgsJson, string csCode)
     {
         if (!IsBridgeOnline())
         {
@@ -52,7 +52,7 @@ public static class UnityBridgeSample
         string args = csCode != null
             ? "{\"code\":" + JsonUtility.ToJson(csCode) + "}"
             : (plainArgsJson ?? "{}");
-        string payload = "{\"id\":\"" + id + "\",\"op\":\"" + op + "\",\"args\":" + args + "}";
+        string payload = "{\"id\":\"" + id + "\",\"domain\":\"" + domain + "\",\"op\":\"" + op + "\",\"args\":" + args + "}";
 
         try
         {
@@ -65,8 +65,8 @@ public static class UnityBridgeSample
             return;
         }
 
-        Debug.Log("[UnityBridge Sample] sent " + op + " (" + id + ")");
-        Poll(id, op);
+        Debug.Log("[UnityBridge Sample] sent " + domain + "." + op + " (" + id + ")");
+        Poll(id, domain + "." + op);
     }
 
     static bool IsBridgeOnline()
@@ -76,7 +76,7 @@ public static class UnityBridgeSample
     }
 
     /// <summary>Poll out/<id>.json on the editor update loop until it appears or times out.</summary>
-    static void Poll(string id, string op)
+    static void Poll(string id, string label)
     {
         float deadline = Time.realtimeSinceStartup + TimeoutSeconds;
         EditorApplication.update += Handler;
@@ -87,13 +87,13 @@ public static class UnityBridgeSample
             if (File.Exists(path))
             {
                 EditorApplication.update -= Handler;
-                Debug.Log("[UnityBridge Sample] " + op + " -> " + File.ReadAllText(path));
+                Debug.Log("[UnityBridge Sample] " + label + " -> " + File.ReadAllText(path));
                 return;
             }
             if (Time.realtimeSinceStartup > deadline)
             {
                 EditorApplication.update -= Handler;
-                Debug.LogWarning("[UnityBridge Sample] " + op + " timed out after " + TimeoutSeconds + "s");
+                Debug.LogWarning("[UnityBridge Sample] " + label + " timed out after " + TimeoutSeconds + "s");
             }
         }
     }

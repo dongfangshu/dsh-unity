@@ -1,20 +1,25 @@
-# DSH ↔ Unity Bridge (v1)
+# DSH ↔ Unity Bridge (v2)
 
 File-queue bridge that lets the DSH agent control the Unity editor from
 `D:\DSH Unity\UnityMain`. No network ports — commands and responses travel as
-JSON files under `UnityMain/UnityBridge/`.
+JSON files under `Library/UnityBridge/` inside the Unity project (machine-local,
+never version-controlled, auto-recreated on init).
 
 ## Components
 
 | Side | File | Role |
 |---|---|---|
-| Unity | `UnityMain/Assets/Plugins/UnityBridge/` (UPM package: `Editor/UnityBridge.cs` + `Editor/Roslyn/*.dll` + `Runtime/`) | Polls `in/`, executes ops on the main thread, writes responses, heartbeat + log capture |
+| Unity | `UnityMain/Assets/Plugins/UnityBridge/` (UPM package: `Editor/` asmdef `DSH.UnityBridge.Editor` + `CoreHandler/SceneHandler/AssetHandler/ScriptHandler.cs` + bundled Roslyn DLLs flat in `Editor/` + `Runtime/` + `Samples~`) | Polls `in/`, routes by domain, executes ops on the main thread, writes responses, heartbeat + log capture |
 | DSH | dynamic Cordis plugin (`unity_status`, `unity_exec`, `unity_cs`, `unity_log` tools) | Writes command files, polls `out/`, reports results |
 
 The bridge auto-starts when the editor loads. Toggle via
 `Tools > Unity Bridge > Enable/Disable`.
 
-## Folder layout (`UnityMain/UnityBridge/`)
+## Folder layout (`<project>/Library/UnityBridge/`)
+
+The runtime queue lives under the Unity project's `Library/` folder — the same
+place Unity keeps its own cache, so it is machine-local, never committed, and
+safe to wipe (the bridge recreates it on init):
 
 - `in/` — command files `<id>.json`, written by the agent
 - `out/` — response files `<id>.json`, written by Unity (pruned after 120s)
@@ -22,55 +27,63 @@ The bridge auto-starts when the editor loads. Toggle via
 - `status/heartbeat.json` — refreshed every 1s; agent uses it to detect "online"
 - `status/log.json` — last 300 captured console lines
 
-## Protocol
+## Protocol (v2)
 
-Command envelope:
+Ops are namespaced by **domain** (`core | scene | asset | script`); each domain
+is handled by its own `*Handler.cs` file in the package. Command envelope:
 
 ```json
-{ "id": "m1abc-xyzw", "op": "open_scene", "args": { "path": "Assets/Scenes/SampleScene.unity" } }
+{ "id": "m1abc-xyzw", "domain": "scene", "op": "open", "args": { "path": "Assets/Scenes/SampleScene.unity" } }
 ```
 
 Response envelope:
 
 ```json
-{ "id": "m1abc-xyzw", "op": "open_scene", "ok": true, "ts": 1699999999.123, "result": { "scene": "Assets/Scenes/SampleScene.unity", "loaded": true } }
+{ "id": "m1abc-xyzw", "domain": "scene", "op": "open", "ok": true, "ts": 1699999999.123, "result": { "scene": "Assets/Scenes/SampleScene.unity", "loaded": true } }
 ```
 
 Errors: `"ok": false, "error": "..."`.
 
 ## Ops
 
-| op | args | effect |
-|---|---|---|
-| `ping` | — | round-trip check |
-| `status` | — | fresh snapshot: play mode, paused, scene, roots, selection, version |
-| `open_scene` | `path`, `additive?` | open scene (single or additive) |
-| `save` | — | save open scenes |
-| `play` / `stop` | — | enter / exit play mode |
-| `pause` / `resume` / `step` | — | play-mode stepping |
-| `menu` | `item` | `EditorApplication.ExecuteMenuItem` (exact path) |
-| `eval` | `type`, `method`, `argsJson?` | invoke any static method; `argsJson` is a JSON array of scalars |
-| `cs` | `code`, `imports?`, `data?` | compile + run agent-written C# with Roslyn (in memory, no domain reload); code must define `Entry.Main(object args)`; `data` JSON → `args` |
-| `reload` | — | recompile all scripts + domain reload **in place** (no editor restart); heartbeat pauses then resumes |
-| `hierarchy` | `recursive?` | list scene root objects (`name`, `path`, `active`, `children`) |
-| `log` | `lines?` | tail of captured console log |
+| domain | op | args | effect |
+|---|---|---|---|
+| `core` | `ping` | — | round-trip check (`result.pong` = true) |
+| `core` | `status` | — | fresh snapshot: play mode, paused, scene, roots, selection, version |
+| `core` | `log` | `lines?` | tail of captured console log (max 300) |
+| `core` | `reload` | — | recompile all scripts + domain reload **in place** (no editor restart); heartbeat pauses then resumes |
+| `core` | `menu` | `item` | `EditorApplication.ExecuteMenuItem` (exact path) |
+| `scene` | `open` | `path`, `additive?` | open scene (single or additive) |
+| `scene` | `save` | — | save open scenes |
+| `scene` | `play` / `stop` | — | enter / exit play mode |
+| `scene` | `pause` / `resume` / `step` | — | play-mode stepping |
+| `scene` | `hierarchy` | `recursive?` | list scene root objects (`name`, `path`, `active`, `children`) |
+| `asset` | `refresh` | — | `AssetDatabase.Refresh()` |
+| `asset` | `import` | `path` | import one asset by project path, e.g. `"Assets/Foo.png"` |
+| `asset` | `list` | `path?`, `max?` | list asset paths under a folder (default `Assets`, capped) |
+| `script` | `eval` | `type`, `method`, `argsJson?` | invoke any static method; `argsJson` is a JSON array of scalars |
+| `script` | `cs` | `code`, `imports?`, `data?` | compile + run agent-written C# with Roslyn (in memory, no domain reload); code must define `Entry.Main(object args)`; `data` JSON → `args` |
+
+Unknown domains/ops are rejected with an error response. Adding a new domain
+= one handler class + one `case` in `UnityBridge.Execute`.
 
 ## Security note
 
-`eval` can run arbitrary static code inside the editor (e.g.
+`script.eval` / `script.cs` can run arbitrary code inside the editor (e.g.
 `Debug.Break()`, `AssetDatabase.Refresh()`). The bridge binds to nothing but
 the local filesystem; keep `in/` trusted.
 
-## Roslyn C# scripting (`cs` op / `unity_cs` tool)
+## Roslyn C# scripting (`script.cs` op / `unity_cs` tool)
 
-The embedded UPM package `UnityMain/Packages/com.dsh.unitybridge` bundles the
-bridge plus Microsoft.CodeAnalysis 3.8.0 (editor-only, `Editor/Roslyn/` folder)
-with its exact runtime deps at the assembly versions Roslyn references
-(`System.Collections.Immutable` 5.0.0, `System.Reflection.Metadata` 5.0.0,
-`System.Memory` 4.0.1.1, `System.Threading.Tasks.Extensions` 4.2.0.1,
-`System.Runtime.CompilerServices.Unsafe` 4.0.6.0, `System.Text.Encoding.CodePages`
-4.1.1.0, `System.Buffers` 4.0.3.0, `System.Numerics.Vectors` 4.1.4.0). No
-domain reload: scripts compile to memory and run on the editor main thread.
+The UPM package at `Assets/Plugins/UnityBridge/` bundles the bridge plus
+Microsoft.CodeAnalysis 3.8.0 (editor-only, DLLs flat in `Editor/`, referenced
+by the `DSH.UnityBridge.Editor` asmdef) with its exact runtime deps at the
+assembly versions Roslyn references (`System.Collections.Immutable` 5.0.0,
+`System.Reflection.Metadata` 5.0.0, `System.Memory` 4.0.1.1,
+`System.Threading.Tasks.Extensions` 4.2.0.1, `System.Runtime.CompilerServices.Unsafe`
+4.0.6.0, `System.Text.Encoding.CodePages` 4.1.1.0, `System.Buffers` 4.0.3.0,
+`System.Numerics.Vectors` 4.1.4.0). No domain reload: scripts compile to
+memory and run on the editor main thread.
 
 - **Contract**: the code must define a static class named `Entry` with a
   `public static object Main(object args)` method. `args` is the parsed
@@ -95,28 +108,29 @@ domain reload: scripts compile to memory and run on the editor main thread.
 ## Agent-side tools
 
 - `unity_status` — is the bridge online? current state
-- `unity_exec` — send one op and wait for the response
+- `unity_exec` — send one op (any domain) and wait for the response
 - `unity_cs` — compile and run agent-written C# in the editor (Roslyn)
 - `unity_log` — tail of the captured Unity console log
 
 > **Agent-agnostic**: the bridge speaks a plain file-queue protocol, so *any*
 > agent with file access can drive Unity. `skills/unity-bridge/SKILL.md` is a
-> ready-made Agent Skill (Anthropic format) — copy the folder into other
-> agents' skill directories (Claude Code `~/.claude/skills/`, Cursor
-> `.cursor/skills/`, Copilot `.github/skills/`, ...) or paste it as context.
+> ready-made Agent Skill (Anthropic format). It is **loaded on demand**: copy
+> or mount it into an agent only when the user asks to control Unity — do not
+> auto-inject it into every agent's context. The skill never locates the
+> bridge by a fixed path and never launches Unity; it discovers the project
+> under the current workspace and reports offline to the user.
 
-## Web settings (Unity paths)
+## Web settings (Unity path)
 
 The DSH plugin registers a **Unity Bridge** page in the web app's Settings
-(设置 → Unity Bridge). It persists two machine-local values to
+(设置 → Unity Bridge). It persists one machine-local value to
 `.unity-bridge-config.json` in the workspace root (gitignored):
 
-- `unityProjectPath` — the Unity project folder; the bridge root is derived
-  as `<project>/UnityBridge` (default `D:/DSH Unity/UnityMain`)
-- `unityExePath` — path to Unity.exe (default
-  `C:/Unity/2022.3.4f1/Editor/Unity.exe`)
+- `unityProjectPath` — the Unity project folder; the bridge queue is derived
+  as `<project>/Library/UnityBridge`. Leave empty to auto-detect under the
+  workspace (`./Assets` or `./UnityMain/Assets`).
 
-The agent-side tools read these values on every call, so a save in Settings
+The agent-side tools read this value on every call, so a save in Settings
 takes effect immediately — no plugin restart needed.
 
 > The dynamic plugin itself is process-local: after a DSH restart it must be

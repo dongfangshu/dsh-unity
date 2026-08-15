@@ -5,9 +5,17 @@
 //  see SimpleJSON.cs in this folder. This file only shapes the wire protocol
 //  and converts between JSONNode and plain C# objects.
 //
-//  Command:   { "id": "...", "op": "...", "args": { ... } }
-//  Response:  { "id": "...", "op": "...", "ok": true,  "ts": ..., "result": { ... } }
-//             { "id": "...", "op": "...", "ok": false, "ts": ..., "error": "..." }
+//  Protocol v2 — ops are namespaced by domain:
+//
+//    Command:   { "id": "...", "domain": "scene", "op": "play", "args": { ... } }
+//    Response:  { "id": "...", "domain": "scene", "op": "play", "ok": true,
+//                 "ts": ..., "result": { ... } }
+//               { "id": "...", "domain": "scene", "op": "play", "ok": false,
+//                 "ts": ..., "error": "..." }
+//
+//  Domains: core | scene | asset | script. Each domain is handled by its own
+//  *Handler.cs file; the core routes on the `domain` field. Unknown
+//  domains/ops are rejected with an error response.
 // ============================================================================
 #if UNITY_EDITOR
 using System;
@@ -17,10 +25,12 @@ using SimpleJSON;
 
 namespace DSH.UnityBridge
 {
-    /// <summary>Command envelope written by the agent into <project>/UnityBridge/in/.</summary>
+    /// <summary>Command envelope written by the agent into
+    /// &lt;project&gt;/Library/UnityBridge/in/.</summary>
     public class BridgeCommand
     {
         public string id;
+        public string domain;
         public string op;
         public JSONObject args;
 
@@ -32,27 +42,31 @@ namespace DSH.UnityBridge
             var cmd = new BridgeCommand
             {
                 id = obj["id"].Value,
+                domain = obj["domain"].Value,
                 op = obj["op"].Value,
                 args = (obj["args"] as JSONObject) ?? new JSONObject(),
             };
+            if (string.IsNullOrEmpty(cmd.domain)) throw new Exception("missing 'domain' (core|scene|asset|script)");
             if (string.IsNullOrEmpty(cmd.op)) throw new Exception("missing 'op'");
             return cmd;
         }
     }
 
-    /// <summary>Response envelope written to <project>/UnityBridge/out/.</summary>
+    /// <summary>Response envelope written to &lt;project&gt;/Library/UnityBridge/out/.</summary>
     public class BridgeResponse
     {
         public string id;
+        public string domain;
         public string op;
         public bool ok;
         public double ts;
         public JSONNode result;   // set when ok
         public string error;      // set when !ok
 
-        public BridgeResponse(string id, string op, bool ok, object result, string error)
+        public BridgeResponse(string id, string domain, string op, bool ok, object result, string error)
         {
             this.id = id ?? "";
+            this.domain = domain ?? "";
             this.op = op ?? "";
             this.ok = ok;
             this.ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
@@ -64,6 +78,7 @@ namespace DSH.UnityBridge
         {
             var o = new JSONObject();
             o["id"] = id;
+            o["domain"] = domain;
             o["op"] = op;
             o["ok"] = ok;
             o["ts"] = ts;

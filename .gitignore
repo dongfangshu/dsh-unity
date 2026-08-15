@@ -37,9 +37,6 @@ Thumbs.db
 *.unitypackage
 *.app
 
-# ===== DSH Unity bridge: transient queue state (recreated on editor start) =====
-UnityMain/UnityBridge/
-
 # ===== DSH Unity bridge: machine-local config (Unity paths, set in web Settings) =====
 .unity-bridge-config.json
 
