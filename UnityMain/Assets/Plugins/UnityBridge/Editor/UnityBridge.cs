@@ -24,8 +24,9 @@
 //                                           with args.code = file body.
 //    domain "log"     -> LogHandler.cs     (log — console ring tail)
 //    domain "core"    -> CoreHandler.cs    (ping, reload, status, menuitem,
-//                                           openscene, removescene, save,
-//                                           play, stop, pause, resume, step)
+//                                           openscene, removescene, savescene,
+//                                           saveassets, play, stop, pause,
+//                                           resume, step)
 //
 //  Command:   { "id": "...", "domain": "scene", "op": "play", "args": { } }
 //  Response:  { "id": "...", "domain": "scene", "op": "play", "ok": true,

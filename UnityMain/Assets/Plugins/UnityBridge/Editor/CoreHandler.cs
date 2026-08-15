@@ -1,8 +1,8 @@
 // ============================================================================
 //  CoreHandler.cs — `core` domain: editor-session operations (a closed set).
 //
-//  Ops: ping | reload | status | menuitem | openscene | removescene | save |
-//       play | stop | pause | resume | step
+//  Ops: ping | reload | status | menuitem | openscene | removescene |
+//       savescene | saveassets | play | stop | pause | resume | step
 //  (routed here by UnityBridge.Execute on the command's `domain` field)
 //
 //  The capability boundary (see CONTEXT.md): core holds editor-session
@@ -40,8 +40,10 @@ namespace DSH.UnityBridge
                 case "ping":
                     return new Dictionary<string, object> { ["pong"] = true, ["bridge"] = UnityBridge.Version };
                 case "reload":
-                    // Respond first; compilation/domain-reload happens after
-                    // this returns (the queue has already claimed the command).
+                    // Import + compile only. Does not save scenes or assets —
+                    // persist first with savescene / saveassets if you want
+                    // in-memory edits to survive. Respond first; compilation
+                    // happens after this returns (the queue has claimed it).
                     AssetDatabase.Refresh();
                     CompilationPipeline.RequestScriptCompilation();
                     return new Dictionary<string, object> { ["reloading"] = true };
@@ -53,8 +55,11 @@ namespace DSH.UnityBridge
                     return OpenScene(UnityBridge.GetString(args, "path"), UnityBridge.GetString(args, "mode"));
                 case "removescene":
                     return RemoveScene(UnityBridge.GetString(args, "path"));
-                case "save":
-                    return Save(UnityBridge.GetString(args, "path"));
+                case "savescene":
+                    return SaveScene(UnityBridge.GetString(args, "path"));
+                case "saveassets":
+                    AssetDatabase.SaveAssets();
+                    return new Dictionary<string, object> { ["saved"] = true };
                 case "play":
                     EditorApplication.EnterPlaymode();
                     return new Dictionary<string, object> { ["playing"] = true };
@@ -163,7 +168,7 @@ namespace DSH.UnityBridge
             return new Dictionary<string, object> { ["closed"] = removed };
         }
 
-        static Dictionary<string, object> Save(string path)
+        static Dictionary<string, object> SaveScene(string path)
         {
             if (string.IsNullOrEmpty(path))
                 return new Dictionary<string, object> { ["saved"] = EditorSceneManager.SaveOpenScenes() };

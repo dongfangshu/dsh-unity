@@ -129,12 +129,13 @@ becomes `{type, name, instance}`.
 | op | args | effect |
 |---|---|---|
 | `core.ping` | — | round-trip check (`result.pong` = true) |
-| `core.reload` | — | write `{reloading: true}` first, then `AssetDatabase.Refresh()` + `RequestScriptCompilation()`. This is the op that may destroy the running domain; in-flight `execute.cs` that triggers a reload is reaped as `"interrupted by domain reload"` (never retried) |
+| `core.reload` | — | write `{reloading: true}` first, then `AssetDatabase.Refresh()` + `RequestScriptCompilation()`. Does not save scenes or assets. This is the op that may destroy the running domain; in-flight `execute.cs` that triggers a reload is reaped as `"interrupted by domain reload"` (never retried) |
 | `core.status` | — | snapshot: `playing`, `paused`, `isCompiling`, `isUpdating`, `activeScene`, `openScenes[]`, `selection[]`, `projectPath`, `unityVersion`, `buildTarget` |
 | `core.menuitem` | `item` | check the menu exists (and is enabled), then `ExecuteMenuItem`. Missing or disabled → `"ok": false` |
 | `core.openscene` | `path`, `mode?` (`single`/`additive`) | open a scene; `.unity` suffix optional |
 | `core.removescene` | `path` \| `"all"` | close a scene (discarding unsaved changes); activation moves off the target first; refuses to close the last open scene |
-| `core.save` | `path?` | save all open scenes, or one scene by path |
+| `core.savescene` | `path?` | save all open scenes, or one scene by path |
+| `core.saveassets` | — | `AssetDatabase.SaveAssets()` (dirty assets, not scenes) |
 | `core.play` / `stop` | — | enter / exit play mode |
 | `core.pause` / `resume` / `step` | — | play-mode stepping |
 

@@ -173,12 +173,13 @@ public static class Entry {
 | op | args | effect |
 |---|---|---|
 | `core.ping` | — | round-trip check (`result.pong` = true) |
-| `core.reload` | — | import assets + recompile all scripts (domain reload). **Send this after editing any C# file**; wait for the heartbeat to resume (10–30 s) |
+| `core.reload` | — | import + recompile (domain reload). Does **not** save. After editing project C# on disk, send this and wait for the heartbeat (10–30 s) |
 | `core.status` | — | snapshot: `playing`, `paused`, `isCompiling`, `isUpdating`, `activeScene`, `openScenes[]`, `selection[]`, `projectPath`, `unityVersion`, `buildTarget` |
 | `core.menuitem` | `item` | execute a menu item by exact path, e.g. `"File/Save Project"`. Missing or disabled path → `"ok": false` (validated before execute) |
 | `core.openscene` | `path`, `mode?` (`single`/`additive`) | open a scene (`.unity` optional), e.g. `"Assets/Scenes/SampleScene.unity"` |
 | `core.removescene` | `path` \| `"all"` | close a scene (discards unsaved changes; refuses to close the last one) |
-| `core.save` | `path?` | save all open scenes, or one by path |
+| `core.savescene` | `path?` | save all open scenes, or one by path |
+| `core.saveassets` | — | `AssetDatabase.SaveAssets()` (dirty assets, not scenes) |
 | `core.play` / `stop` | — | enter / exit play mode |
 | `core.pause` / `resume` / `step` | — | play-mode stepping |
 
@@ -191,11 +192,17 @@ public static class Entry {
 - **Read an object's data** → `read.hierarchy <path>/<ComponentType>` for
   SerializedObject properties, or `read.assets` for serialized assets.
 - **Create / modify / delete anything** → `execute.cs` (add components, move
-  objects, spawn prefabs, `AssetDatabase.DeleteAsset`, ...).
+  objects, spawn prefabs, `AssetDatabase.DeleteAsset`, ...). Asset edits that
+  should persist need `EditorUtility.SetDirty` in the script, then
+  `core.saveassets` (wait for `ok`) — do not fold that into reload.
+- **Persist the open scene** → `core.savescene` (wait for `ok`). Skip this to
+  keep in-memory scene edits discardable.
 - **Run a play test** → `core.play`, wait ~3 s, inspect via `read` /
   `log.log`, then `core.stop`.
-- **After editing any C# file in the project** → send `core.reload`, wait for
-  the heartbeat to resume (10–30 s), then re-check `core.status`.
+- **After editing any C# file in the project** → `core.reload` only (the file
+  is already on disk). Wait for the heartbeat to resume (10–30 s), then
+  re-check `core.status`. If you also mutated assets or the scene, save those
+  first and wait for `ok`, then reload. Never queue save + reload together.
 - **If a read is ambiguous** → it lists candidates with `instance` ids; retry
   with the `@<instance>` segment.
 - **User pasted a `unity-bridge` JSON** (Hierarchy right-click **Copy for Agent**,

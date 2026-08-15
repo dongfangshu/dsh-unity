@@ -46,8 +46,8 @@ _Avoid_: 特权写 op、script.cs / script.eval（旧名）
 ## 内置
 
 **core**:
-编辑器会话操作的命名空间，封闭集合：`ping / reload / status / menuitem / openscene / removescene / save / play / stop / pause / resume / step`。会话操作指编辑器菜单/工具栏级的能力，与对象类型无关。
-`reload` 是其中语义特殊的一条：先写出响应，再请求编译（随后 domain reload）。execute 路径上若触发 reload，正在跑的程序集会被杀掉、来不及自己写响应——靠认领与打断诊断收场，而不是在脚本里调用 reload。
+编辑器会话操作的命名空间，封闭集合：`ping / reload / status / menuitem / openscene / removescene / savescene / saveassets / play / stop / pause / resume / step`。会话操作指编辑器菜单/工具栏级的能力，与对象类型无关。
+`reload` 只做导入 + 编译（随后 domain reload），不落盘；要留下内存里的改动，先 `savescene` / `saveassets` 等到 `ok`，再发 `reload`。`reload` 仍是语义特殊的一条：先写出响应，再请求编译。execute 路径上若触发 reload，正在跑的程序集会被杀掉、来不及自己写响应——靠认领与打断诊断收场，而不是在脚本里调用 reload。
 _Avoid_: 按 Unity 类型扩展 core、场景域/资产域 op（旧名）
 
 **log**:
