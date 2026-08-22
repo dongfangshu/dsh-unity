@@ -7,7 +7,7 @@
 //      in/      command files  <op>-<yyyyMMdd-HHmmssfff>.json | .cs
 //      running/ at most one claimed command (claimed before execute)
 //      out/     response files <id>.json   (written here, pruned after 120s)
-//      done/    processed command files    (pruned after 600s)
+//      archive/ completed commands + responses (kept permanently; clean manually)
 //      status/  heartbeat.json (every 1s) + log.json (captured console log)
 //
 //  The runtime queue lives under Library/ — machine-local, never version
@@ -31,7 +31,8 @@
 //               "ts": ..., "result": { ... } }
 //
 //  Claim-then-execute: in/ → running/ (at most one) before Execute, then
-//  out/ + done/. Leftovers in running/ after a domain reload are reaped as
+//  out/ + archive/ (command and response paired, never auto-pruned). Leftovers
+//  in running/ after a domain reload are reaped as
 //  "interrupted by domain reload" and never retried. core.refresh writes its
 //  response before ForceUpdate import so a domain reload cannot swallow it.
 //
@@ -58,7 +59,7 @@ namespace DSH.UnityBridge
     [InitializeOnLoad]
     public static class UnityBridge
     {
-        public const string Version = "1.0.0";
+        public const string Version = "1.1.0";
         public const float PollInterval = 0.15f;        // command folder poll
         public const float HeartbeatInterval = 1.0f;    // status file refresh
         public const int CommandSettleMs = 150;         // ignore brand-new in/ files
@@ -69,7 +70,7 @@ namespace DSH.UnityBridge
         static string _inDir;
         static string _runningDir;
         static string _outDir;
-        static string _doneDir;
+        static string _archiveDir;
         static string _statusDir;
         static float _lastPoll;
         static float _lastHeartbeat;
@@ -83,12 +84,12 @@ namespace DSH.UnityBridge
             _inDir = Path.Combine(_root, "in");
             _runningDir = Path.Combine(_root, "running");
             _outDir = Path.Combine(_root, "out");
-            _doneDir = Path.Combine(_root, "done");
+            _archiveDir = Path.Combine(_root, "archive");
             _statusDir = Path.Combine(_root, "status");
             Directory.CreateDirectory(_inDir);
             Directory.CreateDirectory(_runningDir);
             Directory.CreateDirectory(_outDir);
-            Directory.CreateDirectory(_doneDir);
+            Directory.CreateDirectory(_archiveDir);
             Directory.CreateDirectory(_statusDir);
 
             ReapInterrupted();
@@ -207,7 +208,7 @@ namespace DSH.UnityBridge
         /// <summary>
         /// After a domain reload, anything left in running/ was claimed but
         /// never finished. Write a diagnostic unless out/ already has a
-        /// response (Execute returned, then reload hit before we moved to done/).
+        /// response (Execute returned, then reload hit before we moved to archive/).
         /// </summary>
         static void ReapInterrupted()
         {
@@ -246,15 +247,36 @@ namespace DSH.UnityBridge
             }
         }
 
+        /// <summary>
+        /// Archive a finished command: move the command file from running/ into
+        /// archive/ (never auto-pruned) and copy its response alongside it as
+        /// &lt;stem&gt;.response.json, so the archive holds a complete, auditable
+        /// history of every executed command.
+        /// </summary>
         static void FinishRunning(string runningPath, string name)
         {
-            string dest = Path.Combine(_doneDir, name);
+            string dest = Path.Combine(_archiveDir, name);
             try
             {
                 if (File.Exists(dest)) File.Delete(dest);
                 File.Move(runningPath, dest);
             }
             catch { try { File.Delete(runningPath); } catch { } }
+            ArchiveResponse(Path.GetFileNameWithoutExtension(name));
+        }
+
+        /// <summary>Best-effort copy of the out/ response into the archive.</summary>
+        static void ArchiveResponse(string id)
+        {
+            string src = Path.Combine(_outDir, id + ".json");
+            string dest = Path.Combine(_archiveDir, id + ".response.json");
+            try
+            {
+                if (!File.Exists(src)) return; // no response written — nothing to archive
+                if (File.Exists(dest)) File.Delete(dest);
+                File.Copy(src, dest);
+            }
+            catch { } // archiving is best-effort; out/ remains authoritative
         }
 
         static string GetOpHint(string text)
@@ -353,8 +375,9 @@ namespace DSH.UnityBridge
         static void PruneOldFiles()
         {
             Prune(_outDir, TimeSpan.FromSeconds(120));
-            Prune(_doneDir, TimeSpan.FromSeconds(600));
             Prune(_inDir, TimeSpan.FromSeconds(600)); // stale unclaimed commands
+            // archive/ is never auto-pruned — completed commands are kept
+            // permanently and cleaned manually if the folder grows.
         }
 
         static void Prune(string dir, TimeSpan age)

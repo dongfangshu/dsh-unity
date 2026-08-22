@@ -29,7 +29,7 @@ the project itself.
   in/       command files  <op>-<yyyyMMdd-HHmmssfff>.json | .cs
   running/  at most one claimed command (bridge moves here before execute)
   out/      response files  <op>-<yyyyMMdd-HHmmssfff>.json  (pruned after 120s)
-  done/     processed command files    (pruned after 600s)
+  archive/  completed commands + responses (kept permanently; clean manually)
   status/heartbeat.json                (refreshed every 1s while editor is open)
   status/log.json                      (last 300 captured console lines)
 ```
@@ -66,7 +66,10 @@ settle window.
 
 The bridge picks it up within ~0.2 s, **claims** it (`in/` → `running/`; at
 most one in flight), executes it on the editor main thread, writes
-`out/hierarchy-20260816-003712189.json`, then moves it to `done/`:
+`out/hierarchy-20260816-003712189.json`, then **archives** it: the command
+file and its response are both kept in `archive/`
+(`hierarchy-20260816-003712189.json` + `hierarchy-20260816-003712189.response.json`)
+and are never auto-pruned — a full audit trail of every executed command:
 
 ```json
 { "id": "hierarchy-20260816-003712189", "domain": "read", "op": "hierarchy", "ok": true, "ts": 1786811641.8, "result": { "path": "...", "kind": "gameObject" } }
@@ -84,6 +87,7 @@ Rules:
 - `args` is optional (`{}` when none).
 - Stale files in `in/` are pruned after 10 min; `out/` after 120 s.
   `running/` is not pruned — leftovers are reaped on the next editor load.
+  `archive/` is never auto-pruned — clean it manually if it grows.
 - JSON commands and dropped `.cs` files are both UTF-8.
 
 Helper pattern (atomic write + poll for the response):

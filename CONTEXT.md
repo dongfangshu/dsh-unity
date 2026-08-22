@@ -57,7 +57,7 @@ _Avoid_: 日志文件读取（Editor.log 是未来扩展）
 ## 协议
 
 **文件队列协议**:
-主机（agent）与编辑器之间唯一的通信方式：文件经 `Library/UnityBridge/` 的 in/running/out/done/status 目录单向流动，无网络端口。命令文件名为 `<op>-<yyyyMMdd-HHmmssfff>`（本地时间，`.json` 或 `.cs`）；回包 `out/` 用同一段名字。执行只看 `domain`/`op`（或 `.cs` 全文），不看这段名字。
+主机（agent）与编辑器之间唯一的通信方式：文件经 `Library/UnityBridge/` 的 in/running/out/archive/status 目录单向流动，无网络端口。命令文件名为 `<op>-<yyyyMMdd-HHmmssfff>`（本地时间，`.json` 或 `.cs`）；回包 `out/` 用同一段名字。执行只看 `domain`/`op`（或 `.cs` 全文），不看这段名字。执行完的指令连同回包归档到 `archive/`（指令原文 + `<stem>.response.json`），永久保留、不自动清理。
 
 **认领**:
 一条命令必须先从 in/ 移入 running/ 才执行；running/ 里至多一条。认领先于执行，所以同一条命令不会因 domain reload 再跑一遍（至多一次）。

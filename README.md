@@ -38,7 +38,7 @@ Hierarchy 里右键 **Copy for Agent**（在 Copy 下面），可以把对象地
 | `in/` | Agent 写入的命令：`<op>-<yyyyMMdd-HHmmssfff>.json` 或 `.cs` |
 | `running/` | 正在执行的命令（执行前移入，同时最多一条） |
 | `out/` | Unity 写的回包，文件名与命令 stem 相同（约 120 秒后清理） |
-| `done/` | 已处理的命令（约 600 秒后清理） |
+| `archive/` | 已完成的指令 + 回包，永久归档（不自动清理，可手动删除） |
 | `status/heartbeat.json` | 在线检测 |
 | `status/log.json` | 最近 300 条 Console |
 
@@ -48,6 +48,7 @@ Hierarchy 里右键 **Copy for Agent**（在 Copy 下面），可以把对象地
 - **先写 `*.tmp` 再改名为最终文件**，不要直接写正式路径，否则半截文件会被认领并解析失败。
 - 读回包：轮询 `out/<stem>.json`，`resp.id` 必须和你写的 stem 一致。
 - 执行看的是 `domain` / `op`（或 `.cs` 正文），不是文件名里的 op 前缀。
+- 每条指令执行完会连同回包归档到 `archive/`（指令原文 + `<stem>.response.json`），永不自动删除；它是完整的执行历史，空间不足时可整体清空（和 `Library/` 一样是机器本地缓存）。
 
 PowerShell 示例（原子写入 + 等回包）：
 
